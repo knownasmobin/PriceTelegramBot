@@ -409,6 +409,36 @@ func cleanupChromeTempDirs(dir string) {
 	}
 }
 
+// configureProxyOpts adds proxy settings to chromedp options if TGJU_PROXY is set
+func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllocatorOption {
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+
+		// Basic URL validation for logging
+		parsedURL, err := url.Parse(proxyURL)
+		if err != nil {
+			log.Printf("⚠️ Potential issue with proxy URL format: %v", err)
+		} else {
+			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
+			if parsedURL.User != nil {
+				log.Printf("Proxy authentication: likely enabled")
+			} else {
+				log.Printf("Proxy authentication: likely disabled")
+			}
+		}
+
+		// Add proxy using the recommended programmatic way
+		opts = append(opts, chromedp.ProxyServer(proxyURL))
+
+		// Keep flags potentially useful for proxies
+		opts = append(opts,
+			chromedp.Flag("ignore-certificate-errors", true), // Helps with proxies that intercept TLS
+			// chromedp.Flag("proxy-bypass-list", "") // Optional: Explicitly disable bypass
+		)
+	}
+	return opts
+}
+
 // fetchUsdToIrrPrice uses chromedp to fetch USD to IRR price with a headless browser
 func fetchUsdToIrrPrice() (string, error) {
 	log.Println("Fetching USD to IRR price using headless browser...")
@@ -436,7 +466,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	// Set the TMPDIR environment variable for Chrome
 	os.Setenv("TMPDIR", chromeTemDir)
 
-	// Default chromedp options with additional flags for stability in Docker
+	// Base chromedp options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -462,6 +492,12 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
 	)
 
+	// Add proxy configuration if available
+	opts = configureProxyOpts(opts)
+
+	// Set User Agent last
+	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
+
 	// Add Chrome path if available
 	if browserPath := getBrowserPath(); browserPath != "" {
 		opts = append(opts, chromedp.ExecPath(browserPath))
@@ -469,45 +505,6 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	} else {
 		log.Println("No specific browser path set, letting chromedp find browser automatically")
 	}
-
-	// Add proxy configuration if available
-	proxyEnabled := false
-	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
-		log.Printf("Using proxy for tgju.org: %s", proxyURL)
-
-		// Parse and validate proxy URL
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			log.Printf("⚠️ Invalid proxy URL format: %v", err)
-		} else {
-			// Convert SOCKS5 to HTTP if needed
-			if parsedURL.Scheme == "socks5" {
-				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
-				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
-			}
-
-			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
-			if parsedURL.User != nil {
-				log.Printf("Proxy authentication: enabled")
-			} else {
-				log.Printf("Proxy authentication: disabled")
-			}
-		}
-
-		opts = append(opts,
-			chromedp.ProxyServer(proxyURL),
-			chromedp.Flag("proxy-bypass-list", ""),
-			chromedp.Flag("proxy-pac-url", ""),
-			chromedp.Flag("no-proxy-server", ""),
-			chromedp.Flag("ignore-certificate-errors", true),
-			chromedp.Flag("allow-insecure-localhost", true),
-			chromedp.Flag("disable-web-security", true),
-			chromedp.Flag("allow-running-insecure-content", true),
-		)
-		proxyEnabled = true
-	}
-
-	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
 
 	// Create browser context with error handling
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -524,7 +521,16 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	)
 	defer taskCancel()
 
-	// Add custom headers to make requests look more legitimate
+	// Try a simple navigation to ensure browser starts correctly
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+		log.Printf("ERROR initializing browser: %v", err)
+		return "", fmt.Errorf("failed to initialize browser: %v", err)
+	}
+
+	var price string
+	var htmlContent string
+
+	// Navigate to the page, set headers, and extract price
 	err := chromedp.Run(taskCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Set custom headers using CDP command
@@ -542,34 +548,12 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 				"Sec-Fetch-User":            "?1",
 				"Upgrade-Insecure-Requests": "1",
 			}
-			return network.SetExtraHTTPHeaders(headers).Do(ctx)
+			if err := network.SetExtraHTTPHeaders(headers).Do(ctx); err != nil {
+				log.Printf("Error setting custom headers: %v", err)
+				// Don't fail the whole operation, just log the error
+			}
+			return nil
 		}),
-	)
-	if err != nil {
-		log.Printf("Error setting custom headers: %v", err)
-	}
-
-	var price string
-	var htmlContent string
-
-	// If proxy is configured, test connectivity first
-	if proxyEnabled {
-		log.Println("Testing proxy connectivity...")
-		testErr := chromedp.Run(taskCtx,
-			chromedp.Navigate("https://www.tgju.org"),
-			chromedp.Sleep(1*time.Second),
-		)
-
-		if testErr != nil {
-			log.Printf("⚠️ PROXY ERROR: Could not connect to tgju.org through proxy: %v", testErr)
-			log.Println("⚠️ Please check your proxy configuration or try a different proxy")
-			return "", fmt.Errorf("proxy connection failed: %v", testErr)
-		}
-		log.Println("✅ Proxy connection successful")
-	}
-
-	// Navigate to the page and extract price
-	err = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"),
 		chromedp.Sleep(2*time.Second), // Give time for JavaScript to execute
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -581,18 +565,35 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 		chromedp.Text(`span#l-price_dollar_rl`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
-	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	// Check if navigation failed (could be proxy error)
+	if err != nil {
+		if strings.Contains(err.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected: Could not navigate: %v", err)
+			return "", fmt.Errorf("proxy connection failed or navigation error: %v", err)
+		}
+		// Handle other potential errors during Run (like element not found)
+	}
+
+	// Check if we have any content - if empty, it might indicate proxy issues or blocks
+	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty page content received. Proxy may be blocked or returning invalid content.")
 	}
 
-	// If the first selector failed, try using regular expressions on the HTML content
-	if err != nil || price == "" {
-		log.Println("Direct selector failed, trying regex on HTML content...")
+	// If the direct selector failed or navigation error occurred, try regex on HTML content
+	if price == "" {
+		if htmlContent == "" {
+			// If navigation failed AND content is empty, return the original error
+			if err != nil {
+				return "", fmt.Errorf("failed to navigate or find price element: %v", err)
+			}
+			return "", fmt.Errorf("failed to retrieve HTML content")
+		}
+
+		log.Println("Direct selector failed or price empty, trying regex on HTML content...")
 
 		// Try multiple patterns to find the USD to IRR price
 		patterns := []string{
-			`data-market-row="price_dollar_rl"[^>]*data-title="[^"]*'tooltip-row-txt'>([0-9,]+)`,
+			`data-market-row="price_dollar_rl"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
 			`<span id="l-price_dollar_rl"[^>]*>([0-9,]+)</span>`,
 			`<th><span class="flag flag-usd"><span></span></span> دلار</th>\s*<td class="nf">([0-9,]+)</td>`,
 			`"price_dollar_rl"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
@@ -613,7 +614,8 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 			log.Printf("Pattern %d did not match", i+1)
 		}
 
-		return "", fmt.Errorf("couldn't find USD to IRR price in the webpage")
+		// If regex also failed, return an error
+		return "", fmt.Errorf("couldn't find USD to IRR price using selectors or regex")
 	}
 
 	log.Printf("Successfully extracted USD to IRR price: %s", price)
@@ -738,7 +740,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	// Set the TMPDIR environment variable for Chrome
 	os.Setenv("TMPDIR", chromeTemDir)
 
-	// Default chromedp options with additional flags for stability in Docker
+	// Base chromedp options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -765,42 +767,9 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Add proxy configuration if available
-	proxyEnabled := false
-	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
-		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+	opts = configureProxyOpts(opts)
 
-		// Parse and validate proxy URL
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			log.Printf("⚠️ Invalid proxy URL format: %v", err)
-		} else {
-			// Convert SOCKS5 to HTTP if needed
-			if parsedURL.Scheme == "socks5" {
-				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
-				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
-			}
-
-			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
-			if parsedURL.User != nil {
-				log.Printf("Proxy authentication: enabled")
-			} else {
-				log.Printf("Proxy authentication: disabled")
-			}
-		}
-
-		opts = append(opts,
-			chromedp.ProxyServer(proxyURL),
-			chromedp.Flag("proxy-bypass-list", ""),
-			chromedp.Flag("proxy-pac-url", ""),
-			chromedp.Flag("no-proxy-server", ""),
-			chromedp.Flag("ignore-certificate-errors", true),
-			chromedp.Flag("allow-insecure-localhost", true),
-			chromedp.Flag("disable-web-security", true),
-			chromedp.Flag("allow-running-insecure-content", true),
-		)
-		proxyEnabled = true
-	}
-
+	// Set User Agent last
 	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
 
 	// Add Chrome path if available
@@ -826,34 +795,39 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 	defer taskCancel()
 
-	// Try a simple navigation
-	err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank"))
-	if err != nil {
+	// Try a simple navigation to ensure browser starts correctly
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
 		log.Printf("ERROR initializing browser: %v", err)
 		return "", fmt.Errorf("failed to initialize browser: %v", err)
 	}
 
 	var price string
 	var htmlContent string
+	var pageErr error // Variable to store navigation/run errors
 
-	// If proxy is configured, test connectivity first (if not already tested by USD fetcher)
-	if proxyEnabled {
-		log.Println("Testing proxy connectivity for gold price...")
-		testErr := chromedp.Run(taskCtx,
-			chromedp.Navigate("https://www.tgju.org"),
-			chromedp.Sleep(1*time.Second),
-		)
-
-		if testErr != nil {
-			log.Printf("⚠️ PROXY ERROR: Could not connect to tgju.org through proxy: %v", testErr)
-			log.Println("⚠️ Please check your proxy configuration or try a different proxy")
-			return "", fmt.Errorf("proxy connection failed: %v", testErr)
-		}
-		log.Println("✅ Proxy connection successful")
+	// Set custom headers once
+	headers := map[string]interface{}{
+		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+		"Accept-Language":           "en-US,en;q=0.9,fa;q=0.8",
+		"Cache-Control":             "no-cache",
+		"Pragma":                    "no-cache",
+		"Sec-Ch-Ua":                 `"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"`,
+		"Sec-Ch-Ua-Mobile":          "?0",
+		"Sec-Ch-Ua-Platform":        `"Windows"`,
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-User":            "?1",
+		"Upgrade-Insecure-Requests": "1",
+	}
+	if err := chromedp.Run(taskCtx, network.SetExtraHTTPHeaders(headers)); err != nil {
+		log.Printf("Warning: Error setting custom headers: %v", err)
+		// Continue even if headers fail to set
 	}
 
-	// First try on the main gold price page
-	err = chromedp.Run(taskCtx,
+	// --- Try fetching from the main page ---
+	log.Println("Attempting to fetch gold price from main page...")
+	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org"),
 		chromedp.Sleep(3*time.Second), // Give time for JavaScript to execute
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -863,44 +837,37 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		}),
 	)
 
-	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	if pageErr != nil {
+		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected on main page: %v", pageErr)
+			// Continue to next page attempt, don't return yet
+		} else {
+			log.Printf("Error loading main page: %v", pageErr)
+			// Continue to next page attempt
+		}
+	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty main page content received. Proxy may be blocked or returning invalid content.")
-	}
-
-	// Save the HTML content for debugging
-	if htmlContent != "" {
-	}
-
-	// Try to parse the main page for gold price
-	if htmlContent != "" {
+	} else if htmlContent != "" {
+		// Try to parse the main page for gold price
 		patterns := []string{
 			`<span id="l-geram18">([0-9,]+)</span>`,
 			`<span id="l-geram18"[^>]*>([0-9,]+)</span>`,
-			`data-market-row="geram18"[^>]*data-title="[^"]*tooltip-row-txt'>([0-9,]+)`,
+			`data-market-row="geram18"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
 			`<th>طلای ۱۸ عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
 			`<li class="item-row"><div class="inline">.*?<span class="title">طلا.*?</span>.*?<span class="value">([0-9,]+)</span>`,
 			`class="icon-\S+ icon-sekee"></i>[\s\S]*?<span class="value">([0-9,]+)</span>`,
 			`class="icon-\S+ icon-tala"></i>[\s\S]*?<span class="value">([0-9,]+)</span>`,
 		}
-
-		for i, pattern := range patterns {
-			regex := regexp.MustCompile(pattern)
-			matches := regex.FindStringSubmatch(htmlContent)
-			log.Printf("Trying pattern %d on main page: %s", i+1, pattern)
-
-			if len(matches) >= 2 {
-				price = matches[1]
-				log.Printf("Gold IRR price found with pattern %d on main page: %s", i+1, price)
-				return price, nil
-			}
-
-			log.Printf("Pattern %d did not match on main page", i+1)
+		price = findPriceWithRegex(htmlContent, patterns, "main page")
+		if price != "" {
+			return price, nil // Found the price
 		}
 	}
 
-	// Try the gold price specific page
-	err = chromedp.Run(taskCtx,
+	// --- Try the gold price specific page ---
+	log.Println("Attempting to fetch gold price from specific gold page...")
+	htmlContent = "" // Reset htmlContent
+	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%B7%D9%84%D8%A7"),
 		chromedp.Sleep(3*time.Second), // Give time for JavaScript to execute
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -910,49 +877,38 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		}),
 	)
 
-	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	if pageErr != nil {
+		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected on gold page: %v", pageErr)
+			// Continue to next page attempt
+		} else {
+			log.Printf("Error loading gold page: %v", pageErr)
+			// Continue to next page attempt
+		}
+	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty gold page content received. Proxy may be blocked or returning invalid content.")
-	}
-
-	// Save the HTML content for debugging
-	if htmlContent != "" {
-	}
-
-	// Now try several approaches to find the gold price
-
-	// First: Try to execute JavaScript to get the price directly
-	var jsPrice string
-	err = chromedp.Run(taskCtx,
-		chromedp.Evaluate(`
+	} else if htmlContent != "" {
+		// First: Try to execute JavaScript to get the price directly
+		var jsPrice string
+		err := chromedp.Run(taskCtx, chromedp.Evaluate(`
 			(function() {
-				// Try multiple ways to find the price
-				const elem1 = document.querySelector('span#l-geram18');
-				if (elem1) return elem1.innerText;
-				
-				const elem2 = document.querySelector('[data-market-row="geram18"] .nf');
-				if (elem2) return elem2.innerText;
-				
-				const elem3 = document.querySelector('li.item-row .value');
-				if (elem3) return elem3.innerText;
-				
-				// Return empty if not found
+				const elem1 = document.querySelector('span#l-geram18'); if (elem1) return elem1.innerText;
+				const elem2 = document.querySelector('[data-market-row="geram18"] .nf'); if (elem2) return elem2.innerText;
+				const elem3 = document.querySelector('li.item-row .value'); if (elem3) return elem3.innerText;
 				return '';
 			})()
-		`, &jsPrice),
-	)
+		`, &jsPrice))
 
-	if err == nil && jsPrice != "" {
-		log.Printf("Gold IRR price found using JavaScript: %s", jsPrice)
-		return jsPrice, nil
-	}
+		if err == nil && jsPrice != "" {
+			log.Printf("Gold IRR price found using JavaScript on specific page: %s", jsPrice)
+			return jsPrice, nil
+		}
 
-	// Try using regex patterns on the HTML content
-	if htmlContent != "" {
+		// Try using regex patterns on the HTML content
 		patterns := []string{
 			`<span id="l-geram18">([0-9,]+)</span>`,
 			`<span id="l-geram18"[^>]*>([0-9,]+)</span>`,
-			`data-market-row="geram18"[^>]*data-title="[^"]*tooltip-row-txt'>([0-9,]+)`,
+			`data-market-row="geram18"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
 			`<tr[^>]*data-market-row="geram18"[^>]*>[^<]*<th>[^<]*</th>\s*<td class="nf">([0-9,]+)</td>`,
 			`<th>.*?طلای ۱۸ عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
 			`<th>.*?طلای 18 عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
@@ -963,24 +919,16 @@ func fetchGoldIrrWithBrowser() (string, error) {
 			`data-price="([0-9]+)"[^>]*data-item="قیمت طلا"`,
 			`<li class="item-row"><div class="inline">.*?<span class="title">طلا.*?</span>.*?<span class="value">([0-9,]+)</span>`,
 		}
-
-		for i, pattern := range patterns {
-			regex := regexp.MustCompile(pattern)
-			matches := regex.FindStringSubmatch(htmlContent)
-			log.Printf("Trying pattern %d on specific page: %s", i+1, pattern)
-
-			if len(matches) >= 2 {
-				price = matches[1]
-				log.Printf("Gold IRR price found with pattern %d on specific page: %s", i+1, price)
-				return price, nil
-			}
-
-			log.Printf("Pattern %d did not match on specific page", i+1)
+		price = findPriceWithRegex(htmlContent, patterns, "specific gold page")
+		if price != "" {
+			return price, nil // Found the price
 		}
 	}
 
-	// Try another page as a last resort
-	err = chromedp.Run(taskCtx,
+	// --- Try another page as a last resort ---
+	log.Println("Attempting to fetch gold price from alternative gold chart page...")
+	htmlContent = "" // Reset htmlContent
+	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/gold-chart"),
 		chromedp.Sleep(3*time.Second),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -990,35 +938,33 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		}),
 	)
 
-	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
-		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
-	}
-
-	// Try additional patterns on the alternative page
-	patterns := []string{
-		`<th>آبشده نقدی</th>\s*<td class="nf">([0-9,]+)</td>`,
-		`data-market-nameslug="gold_futures"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
-		`<th>طلای آبشده</th>\s*<td class="nf">([0-9,]+)</td>`,
-		`<span class="value">([0-9,]+)</span>\s*<span class="unit">تومان</span>`,
-		`class="nf">([0-9,]+)</td>\s*<td class="low">[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>`,
-	}
-
-	for i, pattern := range patterns {
-		regex := regexp.MustCompile(pattern)
-		matches := regex.FindStringSubmatch(htmlContent)
-		log.Printf("Trying pattern %d on alternative page: %s", i+1, pattern)
-
-		if len(matches) >= 2 {
-			price = matches[1]
-			log.Printf("Gold IRR price found with pattern %d on alternative page: %s", i+1, price)
-			return price, nil
+	if pageErr != nil {
+		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected on alternative page: %v", pageErr)
+			// Don't return error yet, try calculation fallback
+		} else {
+			log.Printf("Error loading alternative page: %v", pageErr)
+			// Don't return error yet, try calculation fallback
 		}
-
-		log.Printf("Pattern %d did not match on alternative page", i+1)
+	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
+		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
+	} else if htmlContent != "" {
+		// Try additional patterns on the alternative page
+		patterns := []string{
+			`<th>آبشده نقدی</th>\s*<td class="nf">([0-9,]+)</td>`,
+			`data-market-nameslug="gold_futures"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
+			`<th>طلای آبشده</th>\s*<td class="nf">([0-9,]+)</td>`,
+			`<span class="value">([0-9,]+)</span>\s*<span class="unit">تومان</span>`,
+			`class="nf">([0-9,]+)</td>\s*<td class="low">[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>`,
+		}
+		price = findPriceWithRegex(htmlContent, patterns, "alternative page")
+		if price != "" {
+			return price, nil // Found the price
+		}
 	}
 
-	// As a final fallback, try to calculate based on USD gold price and USD to IRR exchange rate
+	// --- Calculation Fallback ---
+	log.Println("Browser attempts failed, trying calculation fallback...")
 	priceCache.mutex.RLock()
 	goldUSD := priceCache.GoldUSD
 	usdToIrrStr := priceCache.UsdToIrr
@@ -1031,7 +977,6 @@ func fetchGoldIrrWithBrowser() (string, error) {
 
 		if err == nil && usdToIrr > 0 {
 			// Calculate gold price in IRR (roughly)
-			// Adjust for gram (1 troy oz = 31.1 grams)
 			gramsPerOunce := 31.1
 			goldIRRPerGram := int(goldUSD * usdToIrr / gramsPerOunce)
 			log.Printf("Calculated gold IRR price based on USD price and exchange rate: %d", goldIRRPerGram)
@@ -1039,7 +984,25 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("couldn't find Gold price in IRR in any webpage")
+	return "", fmt.Errorf("couldn't find Gold price in IRR through browser or calculation")
+}
+
+// findPriceWithRegex searches htmlContent for the first matching pattern and returns the price
+func findPriceWithRegex(htmlContent string, patterns []string, pageDesc string) string {
+	for i, pattern := range patterns {
+		regex := regexp.MustCompile(pattern)
+		matches := regex.FindStringSubmatch(htmlContent)
+		log.Printf("Trying pattern %d on %s: %s", i+1, pageDesc, pattern)
+
+		if len(matches) >= 2 {
+			price := matches[1]
+			log.Printf("Price found with pattern %d on %s: %s", i+1, pageDesc, price)
+			return price
+		}
+
+		log.Printf("Pattern %d did not match on %s", i+1, pageDesc)
+	}
+	return "" // Not found
 }
 
 // fetchGoldIrrFallback tries to fetch Gold IRR price using HTTP requests without a browser
