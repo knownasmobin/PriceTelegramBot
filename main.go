@@ -451,6 +451,10 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
 		chromedp.Flag("disable-extensions", true),
+		// Additional proxy-related flags
+		chromedp.Flag("proxy-bypass-list", ""),
+		chromedp.Flag("proxy-pac-url", ""),
+		chromedp.Flag("no-proxy-server", ""),
 		// Set custom temp directory via command line as well
 		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
 		chromedp.Flag("homedir", chromeTemDir),
@@ -469,6 +473,20 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+
+		// Validate proxy URL format
+		parsedURL, err := url.Parse(proxyURL)
+		if err != nil {
+			log.Printf("⚠️ Invalid proxy URL format: %v", err)
+		} else {
+			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
+			if parsedURL.User != nil {
+				log.Printf("Proxy authentication: enabled")
+			} else {
+				log.Printf("Proxy authentication: disabled")
+			}
+		}
+
 		opts = append(opts, chromedp.ProxyServer(proxyURL))
 		proxyEnabled = true
 	}
@@ -699,6 +717,10 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
 		chromedp.Flag("disable-extensions", true),
+		// Additional proxy-related flags
+		chromedp.Flag("proxy-bypass-list", ""),
+		chromedp.Flag("proxy-pac-url", ""),
+		chromedp.Flag("no-proxy-server", ""),
 		// Set custom temp directory via command line as well
 		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
 		chromedp.Flag("homedir", chromeTemDir),
@@ -717,6 +739,20 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+
+		// Validate proxy URL format
+		parsedURL, err := url.Parse(proxyURL)
+		if err != nil {
+			log.Printf("⚠️ Invalid proxy URL format: %v", err)
+		} else {
+			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
+			if parsedURL.User != nil {
+				log.Printf("Proxy authentication: enabled")
+			} else {
+				log.Printf("Proxy authentication: disabled")
+			}
+		}
+
 		opts = append(opts, chromedp.ProxyServer(proxyURL))
 		proxyEnabled = true
 	}
