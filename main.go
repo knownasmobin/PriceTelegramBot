@@ -600,9 +600,7 @@ func fetchUsdToIrrFallback() (string, error) {
 
 	// Try multiple approaches
 	urls := []string{
-		"https://www.tgju.org/profile/price_dollar_rl",
-		"https://www.tgju.org/profile/price_dollar_rl/ajax",
-		"https://call3.tgju.org/ajax.json",
+		"https://mazaneh.net/fa",
 	}
 
 	client := &http.Client{
@@ -647,12 +645,8 @@ func fetchUsdToIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
-			`price_dollar_rl"[^>]*>.*?<span[^>]*>([0-9,]+)</span>`,
-			`"price_dollar_rl"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
-			`<div class="value">.*?([0-9,]+).*?</div>`,
-			`"p":([0-9]+)`,
-			`"price":([0-9]+)`,
-			`"price":"([0-9,]+)"`,
+			`<div id="USD"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -665,7 +659,6 @@ func fetchUsdToIrrFallback() (string, error) {
 		}
 	}
 
-	// If we got this far, the fallback methods also failed
 	return "", fmt.Errorf("all fallback methods failed to fetch USD to IRR price")
 }
 
@@ -818,9 +811,7 @@ func fetchGoldIrrFallback() (string, error) {
 
 	// Try multiple approaches
 	urls := []string{
-		"https://www.tgju.org/profile/geram18",
-		"https://www.tgju.org/profile/geram18/ajax",
-		"https://call3.tgju.org/ajax.json",
+		"https://mazaneh.net/fa",
 	}
 
 	client := &http.Client{
@@ -865,13 +856,8 @@ func fetchGoldIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
-			`geram18"[^>]*>.*?<span[^>]*>([0-9,]+)</span>`,
-			`"geram18"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
-			`<div class="value">.*?([0-9,]+).*?</div>`,
-			`"geram18"[^>]*>.*?data-val="([0-9,]+)"`,
-			`"p":([0-9]+)`,
-			`"price":([0-9]+)`,
-			`"price":"([0-9,]+)"`,
+			`<div id="Div38"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -881,27 +867,6 @@ func fetchGoldIrrFallback() (string, error) {
 				log.Printf("Gold IRR price found with fallback method: %s", matches[1])
 				return matches[1], nil
 			}
-		}
-	}
-
-	// Calculate based on USD gold price and exchange rate as last resort
-	priceCache.mutex.RLock()
-	goldUSD := priceCache.GoldUSD
-	usdToIrrStr := priceCache.UsdToIrr
-	priceCache.mutex.RUnlock()
-
-	if goldUSD > 0 && usdToIrrStr != "" {
-		// Remove commas from USD to IRR price
-		usdToIrrStr = strings.ReplaceAll(usdToIrrStr, ",", "")
-		usdToIrr, err := strconv.ParseFloat(usdToIrrStr, 64)
-
-		if err == nil && usdToIrr > 0 {
-			// Calculate gold price in IRR (roughly)
-			// Adjust for gram (1 troy oz = 31.1 grams)
-			gramsPerOunce := 31.1
-			goldIRRPerGram := int(goldUSD * usdToIrr / gramsPerOunce)
-			log.Printf("Calculated gold IRR price based on USD price and exchange rate: %d", goldIRRPerGram)
-			return fmt.Sprintf("%d", goldIRRPerGram), nil
 		}
 	}
 
