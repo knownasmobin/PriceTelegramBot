@@ -411,37 +411,36 @@ func cleanupChromeTempDirs(dir string) {
 
 // configureProxyOpts adds proxy settings to chromedp options if TGJU_PROXY is set
 func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllocatorOption {
-	proxyURL := os.Getenv("TGJU_PROXY")
-	log.Printf("Raw TGJU_PROXY env var: '%s'", proxyURL) // Log raw value
+	// Check if the proxy env var is set, even if we don't use its value directly here
+	// We use its presence to decide whether to configure PAC
+	proxyURLEnv := os.Getenv("TGJU_PROXY")
+	log.Printf("Raw TGJU_PROXY env var: '%s' (Used to enable PAC config)", proxyURLEnv)
 
-	if proxyURL != "" {
-		log.Printf("Attempting to use proxy for tgju.org: %s", proxyURL)
+	if proxyURLEnv != "" {
+		// --- Using PAC File Configuration ---
+		pacFilePath := "file:///app/proxy.pac" // Absolute path inside the container
+		log.Printf("Applying proxy via PAC file: %s", pacFilePath)
 
-		// Basic URL validation for logging
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			log.Printf("⚠️ Warning: Error parsing proxy URL: %v - Will attempt to use as is.", err)
-		} else {
-			log.Printf("Parsed proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
-			if parsedURL.User != nil {
-				log.Printf("Proxy authentication: likely enabled")
+		opts = append(opts,
+			chromedp.Flag("proxy-pac-url", pacFilePath),
+			chromedp.Flag("ignore-certificate-errors", true), // Keep this, useful with proxies
+		)
+
+		// Remove potentially conflicting direct proxy flags if they were added before
+		// (Defensive coding, though should not happen with current structure)
+		var filteredOpts []chromedp.ExecAllocatorOption
+		for _, opt := range opts {
+			// Check if the option is the --proxy-server flag
+			if !strings.HasPrefix(fmt.Sprintf("%#v", opt), "chromedp.Flag(\"proxy-server\",") {
+				filteredOpts = append(filteredOpts, opt)
 			} else {
-				log.Printf("Proxy authentication: likely disabled")
-			}
-			// Ensure the scheme is http or https if parsed correctly
-			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-				log.Printf("⚠️ Warning: Proxy scheme is not 'http' or 'https'. Chromedp might have issues.")
+				log.Println("Defensive filter: Removing existing --proxy-server flag before adding PAC URL.")
 			}
 		}
+		opts = filteredOpts
 
-		log.Printf("Applying proxy to chromedp via command-line flag --proxy-server='%s'", proxyURL) // Log exact value being used for the flag
-		// Add proxy using the command-line flag method (with credentials)
-		opts = append(opts, chromedp.Flag("proxy-server", proxyURL))
-
-		// Restore ignore-certificate-errors flag, often needed for proxies
-		opts = append(opts,
-			chromedp.Flag("ignore-certificate-errors", true),
-		)
+	} else {
+		log.Println("No TGJU_PROXY env var set, skipping PAC configuration.")
 	}
 	return opts
 }
