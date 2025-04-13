@@ -470,7 +470,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 		log.Println("No specific browser path set, letting chromedp find browser automatically")
 	}
 
-	// Check if a proxy is configured for tgju.org
+	// Add proxy configuration if available
 	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
@@ -494,18 +494,20 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 			}
 		}
 
-		// Add proxy configuration with additional flags
 		opts = append(opts,
 			chromedp.ProxyServer(proxyURL),
 			chromedp.Flag("proxy-bypass-list", ""),
 			chromedp.Flag("proxy-pac-url", ""),
 			chromedp.Flag("no-proxy-server", ""),
-			// Additional flags for better proxy support
 			chromedp.Flag("ignore-certificate-errors", true),
 			chromedp.Flag("allow-insecure-localhost", true),
+			chromedp.Flag("disable-web-security", true),
+			chromedp.Flag("allow-running-insecure-content", true),
 		)
 		proxyEnabled = true
 	}
+
+	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
 
 	// Create browser context with error handling
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -763,15 +765,40 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Add proxy configuration if available
+	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+
+		// Parse and validate proxy URL
+		parsedURL, err := url.Parse(proxyURL)
+		if err != nil {
+			log.Printf("⚠️ Invalid proxy URL format: %v", err)
+		} else {
+			// Convert SOCKS5 to HTTP if needed
+			if parsedURL.Scheme == "socks5" {
+				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
+				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
+			}
+
+			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
+			if parsedURL.User != nil {
+				log.Printf("Proxy authentication: enabled")
+			} else {
+				log.Printf("Proxy authentication: disabled")
+			}
+		}
+
 		opts = append(opts,
-			chromedp.Flag("proxy-server", proxyURL),
+			chromedp.ProxyServer(proxyURL),
 			chromedp.Flag("proxy-bypass-list", ""),
+			chromedp.Flag("proxy-pac-url", ""),
+			chromedp.Flag("no-proxy-server", ""),
 			chromedp.Flag("ignore-certificate-errors", true),
 			chromedp.Flag("allow-insecure-localhost", true),
 			chromedp.Flag("disable-web-security", true),
 			chromedp.Flag("allow-running-insecure-content", true),
 		)
+		proxyEnabled = true
 	}
 
 	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
@@ -810,7 +837,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	var htmlContent string
 
 	// If proxy is configured, test connectivity first (if not already tested by USD fetcher)
-	if os.Getenv("TGJU_PROXY") != "" {
+	if proxyEnabled {
 		log.Println("Testing proxy connectivity for gold price...")
 		testErr := chromedp.Run(taskCtx,
 			chromedp.Navigate("https://www.tgju.org"),
@@ -837,7 +864,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
+	if htmlContent == "" && proxyEnabled {
 		log.Println("⚠️ WARNING: Empty main page content received. Proxy may be blocked or returning invalid content.")
 	}
 
@@ -884,7 +911,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
+	if htmlContent == "" && proxyEnabled {
 		log.Println("⚠️ WARNING: Empty gold page content received. Proxy may be blocked or returning invalid content.")
 	}
 
@@ -964,7 +991,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
+	if htmlContent == "" && proxyEnabled {
 		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
 	}
 
