@@ -273,7 +273,7 @@ func getBitcoinPrice() (float64, error) {
 func fetchGoldPrice() (float64, error) {
 	// Using Metals API which provides gold price per troy ounce in USD
 	// This API endpoint doesn't require authentication for limited use
-	url := "https://api.metals.live/v1/spot/gold"
+	url := "https://api.gold-api.com/price/XAU"
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -282,20 +282,20 @@ func fetchGoldPrice() (float64, error) {
 	}
 	defer resp.Body.Close()
 
-	// The response is an array with a single object
-	var response []struct {
-		Price float64 `json:"price"`
+	// The new response is a single object with price field
+	var response struct {
+		Name              string  `json:"name"`
+		Price             float64 `json:"price"`
+		Symbol            string  `json:"symbol"`
+		UpdatedAt         string  `json:"updatedAt"`
+		UpdatedAtReadable string  `json:"updatedAtReadable"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return 0, err
 	}
 
-	if len(response) == 0 {
-		return 0, fmt.Errorf("no gold price data returned")
-	}
-
-	return response[0].Price, nil
+	return response.Price, nil
 }
 
 // getGoldPrice returns Gold price (from cache if available)
