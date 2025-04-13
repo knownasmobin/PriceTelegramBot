@@ -474,11 +474,17 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
 
-		// Validate proxy URL format
+		// Parse and validate proxy URL
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {
 			log.Printf("⚠️ Invalid proxy URL format: %v", err)
 		} else {
+			// Convert SOCKS5 to HTTP if needed
+			if parsedURL.Scheme == "socks5" {
+				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
+				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
+			}
+
 			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
 			if parsedURL.User != nil {
 				log.Printf("Proxy authentication: enabled")
@@ -487,7 +493,16 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 			}
 		}
 
-		opts = append(opts, chromedp.ProxyServer(proxyURL))
+		// Add proxy configuration with additional flags
+		opts = append(opts,
+			chromedp.ProxyServer(proxyURL),
+			chromedp.Flag("proxy-bypass-list", ""),
+			chromedp.Flag("proxy-pac-url", ""),
+			chromedp.Flag("no-proxy-server", ""),
+			// Additional flags for better proxy support
+			chromedp.Flag("ignore-certificate-errors", true),
+			chromedp.Flag("allow-insecure-localhost", true),
+		)
 		proxyEnabled = true
 	}
 
@@ -740,11 +755,17 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
 
-		// Validate proxy URL format
+		// Parse and validate proxy URL
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {
 			log.Printf("⚠️ Invalid proxy URL format: %v", err)
 		} else {
+			// Convert SOCKS5 to HTTP if needed
+			if parsedURL.Scheme == "socks5" {
+				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
+				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
+			}
+
 			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
 			if parsedURL.User != nil {
 				log.Printf("Proxy authentication: enabled")
@@ -753,7 +774,16 @@ func fetchGoldIrrWithBrowser() (string, error) {
 			}
 		}
 
-		opts = append(opts, chromedp.ProxyServer(proxyURL))
+		// Add proxy configuration with additional flags
+		opts = append(opts,
+			chromedp.ProxyServer(proxyURL),
+			chromedp.Flag("proxy-bypass-list", ""),
+			chromedp.Flag("proxy-pac-url", ""),
+			chromedp.Flag("no-proxy-server", ""),
+			// Additional flags for better proxy support
+			chromedp.Flag("ignore-certificate-errors", true),
+			chromedp.Flag("allow-insecure-localhost", true),
+		)
 		proxyEnabled = true
 	}
 
