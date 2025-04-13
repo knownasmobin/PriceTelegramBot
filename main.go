@@ -460,11 +460,14 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("headless", true),
+<<<<<<< HEAD
 		// Cookie and storage settings
 		chromedp.Flag("disable-cookies", false),
 		chromedp.Flag("disable-storage-reset", true),
 		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
 		chromedp.Flag("user-data-dir", tempDir),
+=======
+>>>>>>> 7fb0197 (Enhance Chrome options configuration by adding additional flags for security, performance, and container-specific optimizations. Implement retry logic for Chrome startup to improve reliability. Update command handling for GBP to IRT price fetching, including temporary messaging during data refresh and improved error handling. This refactor aims to streamline browser initialization and enhance user experience with clearer command responses.)
 		// Prevent process scheduler issues
 		chromedp.Flag("disable-process-singleton", true),
 		chromedp.Flag("disable-features", "ProcessPerSite,IsolateOrigins,site-per-process"),
@@ -475,6 +478,15 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
+<<<<<<< HEAD
+=======
+		// Cache and storage settings
+		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
+		chromedp.Flag("user-data-dir", tempDir),
+		chromedp.Flag("disable-cache", true),
+		chromedp.Flag("disable-application-cache", true),
+		chromedp.Flag("disable-offline-load-stale-cache", true),
+>>>>>>> 7fb0197 (Enhance Chrome options configuration by adding additional flags for security, performance, and container-specific optimizations. Implement retry logic for Chrome startup to improve reliability. Update command handling for GBP to IRT price fetching, including temporary messaging during data refresh and improved error handling. This refactor aims to streamline browser initialization and enhance user experience with clearer command responses.)
 		// Security settings
 		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.Flag("allow-insecure-localhost", true),
