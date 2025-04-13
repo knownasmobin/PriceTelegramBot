@@ -650,35 +650,160 @@ func main() {
 					"/status - Check subscription status\n" +
 					"/refresh - Force refresh of price data"
 			case "price":
+				// Run a scraper refresh in the background
+				go priceCache.refreshCache()
+
+				// Send a temporary message while refreshing
+				tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest price data...*")
+				tempMsg.ParseMode = "Markdown"
+				sentMsg, err := bot.Send(tempMsg)
+
+				// Wait a bit for data to refresh
+				time.Sleep(2 * time.Second)
+
+				// Get the updated price message
 				msg.Text = getPriceMessage()
+
+				// If we successfully sent the temp message, edit it instead of sending a new one
+				if err == nil {
+					editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+					editMsg.ParseMode = "Markdown"
+					if _, err := bot.Send(editMsg); err != nil {
+						log.Printf("Error editing message: %v, sending new message instead", err)
+						if _, err := bot.Send(msg); err != nil {
+							log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+						}
+					}
+					continue
+				}
 			case "bitcoin":
-				bitcoinPrice, err := getBitcoinPrice()
-				if err != nil {
-					msg.Text = fmt.Sprintf("Error getting Bitcoin price: %v", err)
-					break
+				// Refresh Bitcoin price in the background
+				go priceCache.updateBitcoinPrice()
+
+				// Send a temporary message while refreshing
+				tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest Bitcoin price...*")
+				tempMsg.ParseMode = "Markdown"
+				sentMsg, err := bot.Send(tempMsg)
+
+				// Wait a bit for data to refresh
+				time.Sleep(1 * time.Second)
+
+				// Get the updated Bitcoin price
+				bitcoinPrice, priceErr := getBitcoinPrice()
+				if priceErr != nil {
+					msg.Text = fmt.Sprintf("Error getting Bitcoin price: %v", priceErr)
+				} else {
+					msg.Text = fmt.Sprintf("🔸 *Bitcoin*: $%.2f", bitcoinPrice)
 				}
-				msg.Text = fmt.Sprintf("🔸 *Bitcoin*: $%.2f", bitcoinPrice)
+
+				// If we successfully sent the temp message, edit it
+				if err == nil {
+					editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+					editMsg.ParseMode = "Markdown"
+					if _, err := bot.Send(editMsg); err != nil {
+						log.Printf("Error editing message: %v, sending new message instead", err)
+						if _, err := bot.Send(msg); err != nil {
+							log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+						}
+					}
+					continue
+				}
 			case "gold":
-				goldPrice, err := getGoldPrice()
-				if err != nil {
-					msg.Text = fmt.Sprintf("Error getting Gold price: %v", err)
-					break
+				// Refresh Gold price in the background
+				go priceCache.updateGoldPrice()
+
+				// Send a temporary message while refreshing
+				tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest Gold price...*")
+				tempMsg.ParseMode = "Markdown"
+				sentMsg, err := bot.Send(tempMsg)
+
+				// Wait a bit for data to refresh
+				time.Sleep(1 * time.Second)
+
+				// Get the updated Gold price
+				goldPrice, priceErr := getGoldPrice()
+				if priceErr != nil {
+					msg.Text = fmt.Sprintf("Error getting Gold price: %v", priceErr)
+				} else {
+					msg.Text = fmt.Sprintf("🔸 *Gold* (per ounce): $%.2f", goldPrice)
 				}
-				msg.Text = fmt.Sprintf("🔸 *Gold* (per ounce): $%.2f", goldPrice)
+
+				// If we successfully sent the temp message, edit it
+				if err == nil {
+					editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+					editMsg.ParseMode = "Markdown"
+					if _, err := bot.Send(editMsg); err != nil {
+						log.Printf("Error editing message: %v, sending new message instead", err)
+						if _, err := bot.Send(msg); err != nil {
+							log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+						}
+					}
+					continue
+				}
 			case "usd":
-				usdToIrrPrice, err := getUsdToIrrPrice()
-				if err != nil {
-					msg.Text = fmt.Sprintf("Error getting USD to IRR exchange rate: %v", err)
-					break
+				// Refresh USD to IRR price in the background
+				go priceCache.updateUsdToIrrPrice()
+
+				// Send a temporary message while refreshing
+				tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest USD to IRR exchange rate...*")
+				tempMsg.ParseMode = "Markdown"
+				sentMsg, err := bot.Send(tempMsg)
+
+				// Wait a bit for data to refresh
+				time.Sleep(1 * time.Second)
+
+				// Get the updated USD to IRR price
+				usdToIrrPrice, priceErr := getUsdToIrrPrice()
+				if priceErr != nil {
+					msg.Text = fmt.Sprintf("Error getting USD to IRR exchange rate: %v", priceErr)
+				} else {
+					msg.Text = fmt.Sprintf("🔸 *USD to IRR*: %s Rials", usdToIrrPrice)
 				}
-				msg.Text = fmt.Sprintf("🔸 *USD to IRR*: %s Rials", usdToIrrPrice)
+
+				// If we successfully sent the temp message, edit it
+				if err == nil {
+					editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+					editMsg.ParseMode = "Markdown"
+					if _, err := bot.Send(editMsg); err != nil {
+						log.Printf("Error editing message: %v, sending new message instead", err)
+						if _, err := bot.Send(msg); err != nil {
+							log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+						}
+					}
+					continue
+				}
 			case "goldirr":
-				goldIrrPrice, err := getGoldPriceInIRR()
-				if err != nil {
-					msg.Text = fmt.Sprintf("Error getting Gold price in IRR: %v", err)
-					break
+				// Refresh Gold IRR price in the background
+				go priceCache.updateGoldIrrPrice()
+
+				// Send a temporary message while refreshing
+				tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest Gold price in IRR...*")
+				tempMsg.ParseMode = "Markdown"
+				sentMsg, err := bot.Send(tempMsg)
+
+				// Wait a bit for data to refresh
+				time.Sleep(1 * time.Second)
+
+				// Get the updated Gold IRR price
+				goldIrrPrice, priceErr := getGoldPriceInIRR()
+				if priceErr != nil {
+					msg.Text = fmt.Sprintf("Error getting Gold price in IRR: %v", priceErr)
+				} else {
+					msg.Text = fmt.Sprintf("🔸 *Gold in IRR*: %s Rials", goldIrrPrice)
 				}
-				msg.Text = fmt.Sprintf("🔸 *Gold in IRR*: %s Rials", goldIrrPrice)
+
+				// If we successfully sent the temp message, edit it
+				if err == nil {
+					editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+					editMsg.ParseMode = "Markdown"
+					if _, err := bot.Send(editMsg); err != nil {
+						log.Printf("Error editing message: %v, sending new message instead", err)
+						if _, err := bot.Send(msg); err != nil {
+							log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+						}
+					}
+					continue
+				}
 			case "refresh":
 				go priceCache.refreshCache()
 				msg.Text = "🔄 Refreshing price data. This may take a few seconds. Use /price to check the updated data."
