@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -451,14 +452,14 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
 		chromedp.Flag("disable-extensions", true),
-		// Additional proxy-related flags
-		chromedp.Flag("proxy-bypass-list", ""),
-		chromedp.Flag("proxy-pac-url", ""),
-		chromedp.Flag("no-proxy-server", ""),
 		// Set custom temp directory via command line as well
 		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
 		chromedp.Flag("homedir", chromeTemDir),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
+		// Make browser look more like a regular browser
+		chromedp.Flag("window-size", "1920,1080"),
+		chromedp.Flag("start-maximized", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
 	)
 
 	// Add Chrome path if available
@@ -511,7 +512,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 15*time.Second)
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 30*time.Second) // Increased timeout
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -521,10 +522,29 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	)
 	defer taskCancel()
 
-	// Test browser launch to catch early errors
-	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
-		log.Printf("ERROR initializing browser: %v", err)
-		return "", fmt.Errorf("failed to initialize browser: %v", err)
+	// Add custom headers to make requests look more legitimate
+	err := chromedp.Run(taskCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Set custom headers using CDP command
+			headers := map[string]interface{}{
+				"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+				"Accept-Language":           "en-US,en;q=0.9,fa;q=0.8",
+				"Cache-Control":             "no-cache",
+				"Pragma":                    "no-cache",
+				"Sec-Ch-Ua":                 `"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"`,
+				"Sec-Ch-Ua-Mobile":          "?0",
+				"Sec-Ch-Ua-Platform":        `"Windows"`,
+				"Sec-Fetch-Dest":            "document",
+				"Sec-Fetch-Mode":            "navigate",
+				"Sec-Fetch-Site":            "none",
+				"Sec-Fetch-User":            "?1",
+				"Upgrade-Insecure-Requests": "1",
+			}
+			return network.SetExtraHTTPHeaders(headers).Do(ctx)
+		}),
+	)
+	if err != nil {
+		log.Printf("Error setting custom headers: %v", err)
 	}
 
 	var price string
@@ -547,7 +567,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	}
 
 	// Navigate to the page and extract price
-	err := chromedp.Run(taskCtx,
+	err = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"),
 		chromedp.Sleep(2*time.Second), // Give time for JavaScript to execute
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -732,15 +752,29 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
 		chromedp.Flag("disable-extensions", true),
-		// Additional proxy-related flags
-		chromedp.Flag("proxy-bypass-list", ""),
-		chromedp.Flag("proxy-pac-url", ""),
-		chromedp.Flag("no-proxy-server", ""),
 		// Set custom temp directory via command line as well
 		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
 		chromedp.Flag("homedir", chromeTemDir),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
+		// Make browser look more like a regular browser
+		chromedp.Flag("window-size", "1920,1080"),
+		chromedp.Flag("start-maximized", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
 	)
+
+	// Add proxy configuration if available
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		opts = append(opts,
+			chromedp.Flag("proxy-server", proxyURL),
+			chromedp.Flag("proxy-bypass-list", ""),
+			chromedp.Flag("ignore-certificate-errors", true),
+			chromedp.Flag("allow-insecure-localhost", true),
+			chromedp.Flag("disable-web-security", true),
+			chromedp.Flag("allow-running-insecure-content", true),
+		)
+	}
+
+	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
 
 	// Add Chrome path if available
 	if browserPath := getBrowserPath(); browserPath != "" {
@@ -750,49 +784,12 @@ func fetchGoldIrrWithBrowser() (string, error) {
 		log.Println("No specific browser path set, letting chromedp find browser automatically")
 	}
 
-	// Check if a proxy is configured for tgju.org
-	proxyEnabled := false
-	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
-		log.Printf("Using proxy for tgju.org: %s", proxyURL)
-
-		// Parse and validate proxy URL
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			log.Printf("⚠️ Invalid proxy URL format: %v", err)
-		} else {
-			// Convert SOCKS5 to HTTP if needed
-			if parsedURL.Scheme == "socks5" {
-				proxyURL = strings.Replace(proxyURL, "socks5://", "http://", 1)
-				log.Printf("Converting SOCKS5 proxy to HTTP: %s", proxyURL)
-			}
-
-			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
-			if parsedURL.User != nil {
-				log.Printf("Proxy authentication: enabled")
-			} else {
-				log.Printf("Proxy authentication: disabled")
-			}
-		}
-
-		// Add proxy configuration with additional flags
-		opts = append(opts,
-			chromedp.ProxyServer(proxyURL),
-			chromedp.Flag("proxy-bypass-list", ""),
-			chromedp.Flag("proxy-pac-url", ""),
-			chromedp.Flag("no-proxy-server", ""),
-			// Additional flags for better proxy support
-			chromedp.Flag("ignore-certificate-errors", true),
-			chromedp.Flag("allow-insecure-localhost", true),
-		)
-		proxyEnabled = true
-	}
-
 	// Create browser context with error handling
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 15*time.Second)
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 30*time.Second) // Increased timeout
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -802,8 +799,9 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 	defer taskCancel()
 
-	// Test browser launch to catch early errors
-	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+	// Try a simple navigation
+	err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank"))
+	if err != nil {
 		log.Printf("ERROR initializing browser: %v", err)
 		return "", fmt.Errorf("failed to initialize browser: %v", err)
 	}
@@ -812,7 +810,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	var htmlContent string
 
 	// If proxy is configured, test connectivity first (if not already tested by USD fetcher)
-	if proxyEnabled {
+	if os.Getenv("TGJU_PROXY") != "" {
 		log.Println("Testing proxy connectivity for gold price...")
 		testErr := chromedp.Run(taskCtx,
 			chromedp.Navigate("https://www.tgju.org"),
@@ -828,7 +826,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	}
 
 	// First try on the main gold price page
-	err := chromedp.Run(taskCtx,
+	err = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org"),
 		chromedp.Sleep(3*time.Second), // Give time for JavaScript to execute
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
@@ -839,7 +837,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty main page content received. Proxy may be blocked or returning invalid content.")
 	}
 
@@ -886,7 +884,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty gold page content received. Proxy may be blocked or returning invalid content.")
 	}
 
@@ -966,7 +964,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	)
 
 	// Check if we have any content - if empty, it likely means the page didn't load properly
-	if htmlContent == "" && proxyEnabled {
+	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
 		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
 	}
 
