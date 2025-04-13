@@ -460,14 +460,6 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("headless", true),
-<<<<<<< HEAD
-		// Cookie and storage settings
-		chromedp.Flag("disable-cookies", false),
-		chromedp.Flag("disable-storage-reset", true),
-		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
-		chromedp.Flag("user-data-dir", tempDir),
-=======
->>>>>>> 7fb0197 (Enhance Chrome options configuration by adding additional flags for security, performance, and container-specific optimizations. Implement retry logic for Chrome startup to improve reliability. Update command handling for GBP to IRT price fetching, including temporary messaging during data refresh and improved error handling. This refactor aims to streamline browser initialization and enhance user experience with clearer command responses.)
 		// Prevent process scheduler issues
 		chromedp.Flag("disable-process-singleton", true),
 		chromedp.Flag("disable-features", "ProcessPerSite,IsolateOrigins,site-per-process"),
@@ -478,15 +470,12 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
-<<<<<<< HEAD
-=======
 		// Cache and storage settings
 		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
 		chromedp.Flag("user-data-dir", tempDir),
 		chromedp.Flag("disable-cache", true),
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
->>>>>>> 7fb0197 (Enhance Chrome options configuration by adding additional flags for security, performance, and container-specific optimizations. Implement retry logic for Chrome startup to improve reliability. Update command handling for GBP to IRT price fetching, including temporary messaging during data refresh and improved error handling. This refactor aims to streamline browser initialization and enhance user experience with clearer command responses.)
 		// Security settings
 		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.Flag("allow-insecure-localhost", true),
@@ -1285,47 +1274,19 @@ func fetchMazanehPrices() (usdIrt, goldIrt, gbpIrt string, err error) {
 	defer allocCancel()
 	defer taskCancel()
 
-	// Navigate and extract prices with retry logic
-	var htmlContent string
-	for i := 0; i < maxRetries; i++ {
-		err = chromedp.Run(taskCtx,
-			chromedp.Navigate("https://mazaneh.net/fa"),
-			chromedp.WaitVisible(`body`),
-			chromedp.Sleep(4*time.Second),
-			chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
-		)
-
-		if err == nil {
-			break
-		}
-
-		log.Printf("Navigation attempt %d failed: %v", i+1, err)
-		if i < maxRetries-1 {
-			time.Sleep(2 * time.Second)
-		}
-	}
+	// Navigate and extract prices
+	err = chromedp.Run(taskCtx,
+		chromedp.Navigate("https://mazaneh.net/fa"),
+		chromedp.WaitVisible(`body`),
+		chromedp.Sleep(4*time.Second),
+		chromedp.Text(`a[href="/currencyprice/دلار"] ~ div.CurrencyPrice`, &usdIrt),
+		chromedp.Text(`a[href="/currencyprice/مظنه_طلا"] ~ div.CurrencyPrice`, &goldIrt),
+		chromedp.Text(`a[href="/currencyprice/پوند"] ~ div.CurrencyPrice`, &gbpIrt),
+	)
 
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to navigate to mazaneh.net: %v", err)
-	}
-
-	// Extract prices using regex as fallback
-	usdRegex := regexp.MustCompile(`<div id="USD" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
-	goldRegex := regexp.MustCompile(`<div id="Div38" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
-	gbpRegex := regexp.MustCompile(`<div id="Div3" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
-
-	usdMatches := usdRegex.FindStringSubmatch(htmlContent)
-	goldMatches := goldRegex.FindStringSubmatch(htmlContent)
-	gbpMatches := gbpRegex.FindStringSubmatch(htmlContent)
-
-	if len(usdMatches) >= 2 {
-		usdIrt = usdMatches[1]
-	}
-	if len(goldMatches) >= 2 {
-		goldIrt = goldMatches[1]
-	}
-	if len(gbpMatches) >= 2 {
-		gbpIrt = gbpMatches[1]
+		log.Printf("Error fetching prices from mazaneh.net using chromedp: %v", err)
+		return "", "", "", fmt.Errorf("failed to fetch prices from mazaneh.net: %v", err)
 	}
 
 	// Clean up old temp directories
