@@ -567,7 +567,6 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 			log.Println("Page loaded, searching for price element...")
 			return nil
 		}),
-		// Try to get USD price using the new selector
 		chromedp.Text(`div#USD .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
@@ -581,7 +580,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 
 	if price == "" {
 		// Try regex as fallback
-		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
+		regex := regexp.MustCompile(`<div id="USD" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
 		matches := regex.FindStringSubmatch(htmlContent)
 		if len(matches) >= 2 {
 			price = matches[1]
@@ -645,8 +644,8 @@ func fetchUsdToIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
-			`<div id="USD"[^>]*>.*?<div class="EnglishTitle">USD</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div id="USD"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div id="USD" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="EnglishTitle">USD</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -778,7 +777,6 @@ func fetchGoldIrrWithBrowser() (string, error) {
 			log.Println("Page loaded, searching for price element...")
 			return nil
 		}),
-		// Try to get Gold price using the new selector
 		chromedp.Text(`div#Div38 .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
@@ -792,7 +790,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 
 	if price == "" {
 		// Try regex as fallback
-		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
+		regex := regexp.MustCompile(`<div id="Div38" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
 		matches := regex.FindStringSubmatch(htmlContent)
 		if len(matches) >= 2 {
 			price = matches[1]
@@ -856,8 +854,8 @@ func fetchGoldIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
-			`<div id="Div38"[^>]*>.*?<div class="EnglishTitle">Gold</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div id="Div38"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div id="Div38" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="EnglishTitle">Gold</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -1119,7 +1117,6 @@ func fetchGbpToIrrWithBrowser() (string, error) {
 			log.Println("Page loaded, searching for price element...")
 			return nil
 		}),
-		// Try to get GBP price using the new selector
 		chromedp.Text(`div#Div3 .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
@@ -1133,7 +1130,7 @@ func fetchGbpToIrrWithBrowser() (string, error) {
 
 	if price == "" {
 		// Try regex as fallback
-		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
+		regex := regexp.MustCompile(`<div id="Div3" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
 		matches := regex.FindStringSubmatch(htmlContent)
 		if len(matches) >= 2 {
 			price = matches[1]
@@ -1197,8 +1194,8 @@ func fetchGbpToIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
-			`<div id="Div3"[^>]*>.*?<div class="EnglishTitle">GBP</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div id="Div3"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div id="Div3" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="EnglishTitle">GBP</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
