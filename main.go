@@ -374,58 +374,39 @@ func getBrowserPath() string {
 	return ""
 }
 
-// createChromeTempDir creates a custom temp directory for Chrome with sufficient space
+// createChromeTempDir creates a unique temporary directory for Chrome
 func createChromeTempDir() string {
-	// Try different locations in order of preference
-	locations := []string{
-		"/app/tmp",   // Custom app directory
-		"./tmp",      // Local directory
-		"/var/tmp",   // Alternative system temp
-		os.TempDir(), // Default system temp
+	// Create a unique directory name using timestamp
+	dirName := fmt.Sprintf("chrome_%d", time.Now().UnixNano())
+	tempDir := filepath.Join(os.TempDir(), dirName)
+
+	// Create the directory
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		log.Printf("Error creating Chrome temp directory: %v", err)
+		return os.TempDir() // Fallback to system temp dir
 	}
 
-	for _, location := range locations {
-		// Create the directory if it doesn't exist
-		if err := os.MkdirAll(location, 0755); err == nil {
-			// Test if we can write to it
-			testFile := filepath.Join(location, "chrome-test")
-			if testErr := os.WriteFile(testFile, []byte("test"), 0644); testErr == nil {
-				os.Remove(testFile) // Clean up test file
-				log.Printf("Using %s for Chrome temporary directory", location)
-				return location
-			}
-		}
-	}
-
-	// If all else fails, try to use the current working directory
-	log.Println("Warning: Could not create a suitable Chrome temp directory, using current directory")
-	return "."
+	return tempDir
 }
 
-// cleanupChromeTempDirs cleans up old Chrome temporary directories
-func cleanupChromeTempDirs(dir string) {
-	// Skip cleanup if we're using the default temp dir
-	if dir == os.TempDir() || dir == "." {
-		return
-	}
-
-	pattern := filepath.Join(dir, "chromedp-runner*")
+// cleanupChromeTempDirs removes old Chrome temp directories
+func cleanupChromeTempDirs() {
+	// Get all directories in temp that start with "chrome_"
+	pattern := filepath.Join(os.TempDir(), "chrome_*")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		log.Printf("Error finding Chrome temp directories: %v", err)
 		return
 	}
 
-	for _, match := range matches {
-		// Only remove directories older than 1 hour
-		info, err := os.Stat(match)
+	// Remove directories older than 1 hour
+	for _, dir := range matches {
+		info, err := os.Stat(dir)
 		if err != nil {
 			continue
 		}
-
-		if time.Since(info.ModTime()) > 1*time.Hour {
-			log.Printf("Cleaning up old Chrome temp directory: %s", match)
-			os.RemoveAll(match)
+		if time.Since(info.ModTime()) > time.Hour {
+			os.RemoveAll(dir)
 		}
 	}
 }
@@ -466,6 +447,41 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 	return opts
 }
 
+// configureChromeOptions sets up Chrome options with proper flags
+func configureChromeOptions() []chromedp.ExecAllocatorOption {
+	// Create a unique temp directory for this Chrome instance
+	tempDir := createChromeTempDir()
+
+	// Base options
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("single-process", true),
+		chromedp.Flag("no-zygote", true),
+		chromedp.Flag("deterministic-fetch", true),
+		// Prevent singleton lock issues
+		chromedp.Flag("disable-process-singleton", true),
+		chromedp.Flag("disable-features", "ProcessPerSite"),
+		// Set custom temp directory
+		chromedp.Flag("user-data-dir", tempDir),
+		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
+		// Reduce memory usage
+		chromedp.Flag("aggressive-cache-discard", true),
+		chromedp.Flag("disable-cache", true),
+		chromedp.Flag("disable-application-cache", true),
+		chromedp.Flag("disable-offline-load-stale-cache", true),
+		chromedp.Flag("disable-extensions", true),
+	)
+
+	// Add proxy configuration if available
+	opts = configureProxyOpts(opts)
+
+	return opts
+}
+
 // fetchUsdToIrrPrice fetches the USD to IRR price, trying Mazaneh first, then Bonbast.
 func fetchUsdToIrrPrice() (string, error) {
 	// Try Mazaneh first
@@ -501,7 +517,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 
 	// Create and clean up Chrome temp directory
 	chromeTemDir := createChromeTempDir()
-	cleanupChromeTempDirs(chromeTemDir)
+	cleanupChromeTempDirs()
 
 	// Set the TMPDIR environment variable for Chrome
 	os.Setenv("TMPDIR", chromeTemDir)
@@ -736,7 +752,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 
 	// Create and clean up Chrome temp directory
 	chromeTemDir := createChromeTempDir()
-	cleanupChromeTempDirs(chromeTemDir)
+	cleanupChromeTempDirs()
 
 	// Set the TMPDIR environment variable for Chrome
 	os.Setenv("TMPDIR", chromeTemDir)
@@ -971,7 +987,7 @@ func fetchGbpToIrrWithBrowser() (string, error) {
 
 	// Create and clean up Chrome temp directory
 	chromeTemDir := createChromeTempDir()
-	cleanupChromeTempDirs(chromeTemDir)
+	cleanupChromeTempDirs()
 
 	// Set the TMPDIR environment variable for Chrome
 	os.Setenv("TMPDIR", chromeTemDir)
@@ -1191,81 +1207,44 @@ func getGbpToIrrPrice() (string, error) {
 	return priceCache.GbpToIrr, nil
 }
 
-// fetchMazanehPrices fetches USD, Gold (IRR), and GBP prices from mazaneh.net
-func fetchMazanehPrices() (usdIrr, goldIrr, gbpIrr string, err error) {
+// fetchMazanehPrices fetches USD, Gold (IRT), and GBP prices from mazaneh.net
+func fetchMazanehPrices() (usdIrt, goldIrt, gbpIrt string, err error) {
 	log.Println("Attempting to fetch prices from mazaneh.net...")
-	mazanehURL := "https://mazaneh.net/fa"
 
-	// Create a context with a timeout for the entire operation
+	// Create a context with a timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Create chrome instance options
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"),
-	)
+	// Configure Chrome options
+	opts := configureChromeOptions()
 
-	// Apply proxy settings if configured
-	opts = configureProxyOpts(opts)
-
-	// Create a temporary directory for Chrome user data
-	tempDir := createChromeTempDir()
-	if tempDir != "" {
-		log.Printf("Using temporary directory for Chrome user data: %s", tempDir)
-		opts = append(opts, chromedp.UserDataDir(tempDir))
-		// Schedule cleanup of the temporary directory
-		defer func() {
-			go cleanupChromeTempDirs(filepath.Dir(tempDir)) // Cleanup parent directory containing the temp dir
-		}()
-	} else {
-		log.Println("Could not create temporary directory for Chrome user data, proceeding without it.")
-	}
-
-	// Create allocator context with the timeout context
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...) // Pass the timeout context here
-	defer cancel()
+	// Create allocator context
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
 
 	// Create task context
-	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
-	defer cancel()
+	taskCtx, taskCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	defer taskCancel()
 
 	// Navigate and extract prices
 	err = chromedp.Run(taskCtx,
-		chromedp.Navigate(mazanehURL),
-		chromedp.WaitVisible(`body`, chromedp.ByQuery), // Wait for body to be potentially ready
-		chromedp.Sleep(4*time.Second),                  // Increase wait time slightly for dynamic content
-		chromedp.Text(`a[href="/currencyprice/دلار"] ~ div.CurrencyPrice`, &usdIrr, chromedp.NodeVisible, chromedp.ByQuery),
-		chromedp.Text(`a[href="/currencyprice/مظنه_طلا"] ~ div.CurrencyPrice`, &goldIrr, chromedp.NodeVisible, chromedp.ByQuery),
-		chromedp.Text(`a[href="/currencyprice/پوند"] ~ div.CurrencyPrice`, &gbpIrr, chromedp.NodeVisible, chromedp.ByQuery),
+		chromedp.Navigate("https://mazaneh.net/fa"),
+		chromedp.WaitVisible(`body`),
+		chromedp.Sleep(4*time.Second),
+		chromedp.Text(`a[href="/currencyprice/دلار"] ~ div.CurrencyPrice`, &usdIrt),
+		chromedp.Text(`a[href="/currencyprice/مظنه_طلا"] ~ div.CurrencyPrice`, &goldIrt),
+		chromedp.Text(`a[href="/currencyprice/پوند"] ~ div.CurrencyPrice`, &gbpIrt),
 	)
 
 	if err != nil {
-		// Check specifically for context deadline exceeded
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("Timeout fetching prices from mazaneh.net: %v", err)
-			return "", "", "", fmt.Errorf("timeout fetching from mazaneh.net: %w", err)
-		}
 		log.Printf("Error fetching prices from mazaneh.net using chromedp: %v", err)
-		return "", "", "", fmt.Errorf("failed to fetch prices from mazaneh.net: %w", err)
+		return "", "", "", fmt.Errorf("failed to fetch prices from mazaneh.net: %v", err)
 	}
 
-	// Basic validation and cleaning (remove commas)
-	usdIrr = strings.ReplaceAll(usdIrr, ",", "")
-	goldIrr = strings.ReplaceAll(goldIrr, ",", "")
-	gbpIrr = strings.ReplaceAll(gbpIrr, ",", "")
+	// Clean up old temp directories
+	go cleanupChromeTempDirs()
 
-	// Log even if some prices are empty, but don't return an error here.
-	// The calling function will decide to fallback based on the specific empty price it needs.
-	if usdIrr == "" || goldIrr == "" || gbpIrr == "" {
-		log.Printf("Mazaneh fetch completed but one or more prices were empty. USD: '%s', Gold: '%s', GBP: '%s'", usdIrr, goldIrr, gbpIrr)
-	}
-
-	log.Printf("Successfully fetched prices from mazaneh.net: USD=%s, Gold=%s, GBP=%s", usdIrr, goldIrr, gbpIrr)
-	return usdIrr, goldIrr, gbpIrr, nil // Return potentially partial results and nil error if chromedp succeeded
+	return usdIrt, goldIrt, gbpIrt, nil
 }
 
 // getPriceMessage returns a formatted message with current prices
