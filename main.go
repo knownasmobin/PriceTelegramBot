@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -27,6 +26,7 @@ type PriceCache struct {
 	GoldUSD    float64
 	UsdToIrr   string
 	GoldIrr    string
+	GbpToIrr   string
 	LastUpdate time.Time
 	mutex      sync.RWMutex
 }
@@ -84,12 +84,24 @@ func (pc *PriceCache) updateGoldIrrPrice() error {
 	return nil
 }
 
+func (pc *PriceCache) updateGbpToIrrPrice() error {
+	price, err := fetchGbpToIrrPrice()
+	if err != nil {
+		return err
+	}
+
+	pc.mutex.Lock()
+	pc.GbpToIrr = price
+	pc.mutex.Unlock()
+	return nil
+}
+
 // refreshCache updates all cached prices
 func (pc *PriceCache) refreshCache() {
 	log.Println("Refreshing price cache...")
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 
 	// Update Bitcoin price
 	go func() {
@@ -128,6 +140,16 @@ func (pc *PriceCache) refreshCache() {
 			log.Printf("Error updating Gold IRR price: %v", err)
 		} else {
 			log.Println("Gold IRR price updated successfully")
+		}
+	}()
+
+	// Update GBP to IRR exchange rate
+	go func() {
+		defer wg.Done()
+		if err := pc.updateGbpToIrrPrice(); err != nil {
+			log.Printf("Error updating GBP to IRR exchange rate: %v", err)
+		} else {
+			log.Println("GBP to IRR exchange rate updated successfully")
 		}
 	}()
 
@@ -462,7 +484,7 @@ func fetchUsdToIrrPrice() (string, error) {
 // fetchUsdToIrrWithBrowser uses chromedp to fetch USD to IRR price with a headless browser
 func fetchUsdToIrrWithBrowser() (string, error) {
 	// Create a context with a longer timeout for the entire operation
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second) // Increased from 30s
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	// Create and clean up Chrome temp directory
@@ -517,7 +539,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second) // Increased from 30s
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second)
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -536,92 +558,36 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	var price string
 	var htmlContent string
 
-	// Navigate to the page, set headers, and extract price
+	// Navigate to the page and extract price
 	err := chromedp.Run(taskCtx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Set custom headers using CDP command
-			headers := map[string]interface{}{
-				"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-				"Accept-Language":           "en-US,en;q=0.9,fa;q=0.8",
-				"Cache-Control":             "no-cache",
-				"Pragma":                    "no-cache",
-				"Sec-Ch-Ua":                 `"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"`,
-				"Sec-Ch-Ua-Mobile":          "?0",
-				"Sec-Ch-Ua-Platform":        `"Windows"`,
-				"Sec-Fetch-Dest":            "document",
-				"Sec-Fetch-Mode":            "navigate",
-				"Sec-Fetch-Site":            "none",
-				"Sec-Fetch-User":            "?1",
-				"Upgrade-Insecure-Requests": "1",
-			}
-			if err := network.SetExtraHTTPHeaders(headers).Do(ctx); err != nil {
-				log.Printf("Error setting custom headers: %v", err)
-				// Don't fail the whole operation, just log the error
-			}
-			return nil
-		}),
-		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"),
-		chromedp.Sleep(5*time.Second), // Slightly increased sleep
+		chromedp.Navigate("https://mazaneh.net/fa"),
+		chromedp.Sleep(5*time.Second),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Println("Page loaded, searching for price element...")
 			return nil
 		}),
-		// Try multiple selectors to find the price
-		chromedp.Text(`span#l-price_dollar_rl`, &price, chromedp.ByQuery, chromedp.NodeVisible),
+		// Try to get USD price using the new selector
+		chromedp.Text(`div#USD .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
-	// Check if navigation failed (could be proxy error)
 	if err != nil {
 		if strings.Contains(err.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
 			log.Printf("⚠️ PROXY ERROR suspected: Could not navigate: %v", err)
 			return "", fmt.Errorf("proxy connection failed or navigation error: %v", err)
 		}
-		// Handle other potential errors during Run (like element not found)
+		return "", fmt.Errorf("failed to navigate or find price element: %v", err)
 	}
 
-	// Check if we have any content - if empty, it might indicate proxy issues or blocks
-	if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
-		log.Println("⚠️ WARNING: Empty page content received. Proxy may be blocked or returning invalid content.")
-	}
-
-	// If the direct selector failed or navigation error occurred, try regex on HTML content
 	if price == "" {
-		if htmlContent == "" {
-			// If navigation failed AND content is empty, return the original error
-			if err != nil {
-				return "", fmt.Errorf("failed to navigate or find price element: %v", err)
-			}
-			return "", fmt.Errorf("failed to retrieve HTML content")
+		// Try regex as fallback
+		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
+		matches := regex.FindStringSubmatch(htmlContent)
+		if len(matches) >= 2 {
+			price = matches[1]
+		} else {
+			return "", fmt.Errorf("couldn't find USD to IRR price")
 		}
-
-		log.Println("Direct selector failed or price empty, trying regex on HTML content...")
-
-		// Try multiple patterns to find the USD to IRR price
-		patterns := []string{
-			`data-market-row="price_dollar_rl"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
-			`<span id="l-price_dollar_rl"[^>]*>([0-9,]+)</span>`,
-			`<th><span class="flag flag-usd"><span></span></span> دلار</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`"price_dollar_rl"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
-			`<h1 class="currency-header">.*?<span class="value">([0-9,]+)</span>`,
-		}
-
-		for i, pattern := range patterns {
-			regex := regexp.MustCompile(pattern)
-			matches := regex.FindStringSubmatch(htmlContent)
-			log.Printf("Trying pattern %d: %s", i+1, pattern)
-
-			if len(matches) >= 2 {
-				price = matches[1]
-				log.Printf("USD to IRR price found with pattern %d: %s", i+1, price)
-				return price, nil
-			}
-
-			log.Printf("Pattern %d did not match", i+1)
-		}
-
-		// If regex also failed, return an error
-		return "", fmt.Errorf("couldn't find USD to IRR price using selectors or regex")
 	}
 
 	log.Printf("Successfully extracted USD to IRR price: %s", price)
@@ -736,7 +702,7 @@ func fetchGoldPriceInIRR() (string, error) {
 // fetchGoldIrrWithBrowser uses chromedp to fetch Gold price in IRR with a headless browser
 func fetchGoldIrrWithBrowser() (string, error) {
 	// Create a context with a longer timeout for the entire operation
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // Increased significantly
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	// Create and clean up Chrome temp directory
@@ -791,7 +757,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second) // Increased from 30s
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second)
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -809,206 +775,41 @@ func fetchGoldIrrWithBrowser() (string, error) {
 
 	var price string
 	var htmlContent string
-	var pageErr error // Variable to store navigation/run errors
 
-	// Set custom headers once
-	headers := map[string]interface{}{
-		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-		"Accept-Language":           "en-US,en;q=0.9,fa;q=0.8",
-		"Cache-Control":             "no-cache",
-		"Pragma":                    "no-cache",
-		"Sec-Ch-Ua":                 `"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"`,
-		"Sec-Ch-Ua-Mobile":          "?0",
-		"Sec-Ch-Ua-Platform":        `"Windows"`,
-		"Sec-Fetch-Dest":            "document",
-		"Sec-Fetch-Mode":            "navigate",
-		"Sec-Fetch-Site":            "none",
-		"Sec-Fetch-User":            "?1",
-		"Upgrade-Insecure-Requests": "1",
-	}
-	if err := chromedp.Run(taskCtx, network.SetExtraHTTPHeaders(headers)); err != nil {
-		log.Printf("Warning: Error setting custom headers: %v", err)
-		// Continue even if headers fail to set
-	}
-
-	// --- Try fetching from the main page ---
-	log.Println("Attempting to fetch gold price from main page...")
-	pageErr = chromedp.Run(taskCtx,
-		chromedp.Navigate("https://www.tgju.org"),
-		chromedp.Sleep(5*time.Second), // Increased sleep
+	// Navigate to the page and extract price
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate("https://mazaneh.net/fa"),
+		chromedp.Sleep(5*time.Second),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Println("Main page loaded, searching for price elements...")
+			log.Println("Page loaded, searching for price element...")
 			return nil
 		}),
+		// Try to get Gold price using the new selector
+		chromedp.Text(`div#Div38 .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
-	if pageErr != nil {
-		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
-			log.Printf("⚠️ PROXY ERROR suspected on main page: %v", pageErr)
-			// Continue to next page attempt, don't return yet
-		} else {
-			log.Printf("Error loading main page: %v", pageErr)
-			// Continue to next page attempt
+	if err != nil {
+		if strings.Contains(err.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected: Could not navigate: %v", err)
+			return "", fmt.Errorf("proxy connection failed or navigation error: %v", err)
 		}
-	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
-		log.Println("⚠️ WARNING: Empty main page content received. Proxy may be blocked or returning invalid content.")
-	} else if htmlContent != "" {
-		// Try to parse the main page for gold price
-		patterns := []string{
-			`<span id="l-geram18">([0-9,]+)</span>`,
-			`<span id="l-geram18"[^>]*>([0-9,]+)</span>`,
-			`data-market-row="geram18"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
-			`<th>طلای ۱۸ عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<li class="item-row"><div class="inline">.*?<span class="title">طلا.*?</span>.*?<span class="value">([0-9,]+)</span>`,
-			`class="icon-\S+ icon-sekee"></i>[\s\S]*?<span class="value">([0-9,]+)</span>`,
-			`class="icon-\S+ icon-tala"></i>[\s\S]*?<span class="value">([0-9,]+)</span>`,
-		}
-		price = findPriceWithRegex(htmlContent, patterns, "main page")
-		if price != "" {
-			return price, nil // Found the price
-		}
+		return "", fmt.Errorf("failed to navigate or find price element: %v", err)
 	}
 
-	// --- Try the gold price specific page ---
-	log.Println("Attempting to fetch gold price from specific gold page...")
-	htmlContent = "" // Reset htmlContent
-	pageErr = chromedp.Run(taskCtx,
-		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%B7%D9%84%D8%A7"),
-		chromedp.Sleep(5*time.Second), // Increased sleep
-		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Println("Gold page loaded, searching for price element...")
-			return nil
-		}),
-	)
-
-	if pageErr != nil {
-		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
-			log.Printf("⚠️ PROXY ERROR suspected on gold page: %v", pageErr)
-			// Continue to next page attempt
-		} else {
-			log.Printf("Error loading gold page: %v", pageErr)
-			// Continue to next page attempt
-		}
-	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
-		log.Println("⚠️ WARNING: Empty gold page content received. Proxy may be blocked or returning invalid content.")
-	} else if htmlContent != "" {
-		// First: Try to execute JavaScript to get the price directly
-		var jsPrice string
-		err := chromedp.Run(taskCtx, chromedp.Evaluate(`
-			(function() {
-				const elem1 = document.querySelector('span#l-geram18'); if (elem1) return elem1.innerText;
-				const elem2 = document.querySelector('[data-market-row="geram18"] .nf'); if (elem2) return elem2.innerText;
-				const elem3 = document.querySelector('li.item-row .value'); if (elem3) return elem3.innerText;
-				return '';
-			})()
-		`, &jsPrice))
-
-		if err == nil && jsPrice != "" {
-			log.Printf("Gold IRR price found using JavaScript on specific page: %s", jsPrice)
-			return jsPrice, nil
-		}
-
-		// Try using regex patterns on the HTML content
-		patterns := []string{
-			`<span id="l-geram18">([0-9,]+)</span>`,
-			`<span id="l-geram18"[^>]*>([0-9,]+)</span>`,
-			`data-market-row="geram18"[^>]*data-title="[^"']*'tooltip-row-txt'>([0-9,]+)`,
-			`<tr[^>]*data-market-row="geram18"[^>]*>[^<]*<th>[^<]*</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<th>.*?طلای ۱۸ عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<th>.*?طلای 18 عیار</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<th>.*?طلا عیار ۱۸</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<th>.*?طلا / گرم</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<h1 class="title">قیمت طلا</h1>[\s\S]*?<span class="value">([0-9,]+)</span>`,
-			`<div class="price-box">\s*<span class="price">([0-9,]+)</span>`,
-			`data-price="([0-9]+)"[^>]*data-item="قیمت طلا"`,
-			`<li class="item-row"><div class="inline">.*?<span class="title">طلا.*?</span>.*?<span class="value">([0-9,]+)</span>`,
-		}
-		price = findPriceWithRegex(htmlContent, patterns, "specific gold page")
-		if price != "" {
-			return price, nil // Found the price
-		}
-	}
-
-	// --- Try another page as a last resort ---
-	log.Println("Attempting to fetch gold price from alternative gold chart page...")
-	htmlContent = "" // Reset htmlContent
-	pageErr = chromedp.Run(taskCtx,
-		chromedp.Navigate("https://www.tgju.org/gold-chart"),
-		chromedp.Sleep(5*time.Second), // Increased sleep
-		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Println("Alternative gold page loaded, searching for price element...")
-			return nil
-		}),
-	)
-
-	if pageErr != nil {
-		if strings.Contains(pageErr.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
-			log.Printf("⚠️ PROXY ERROR suspected on alternative page: %v", pageErr)
-			// Don't return error yet, try calculation fallback
-		} else {
-			log.Printf("Error loading alternative page: %v", pageErr)
-			// Don't return error yet, try calculation fallback
-		}
-	} else if htmlContent == "" && os.Getenv("TGJU_PROXY") != "" {
-		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
-	} else if htmlContent != "" {
-		// Try additional patterns on the alternative page
-		patterns := []string{
-			`<th>آبشده نقدی</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`data-market-nameslug="gold_futures"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
-			`<th>طلای آبشده</th>\s*<td class="nf">([0-9,]+)</td>`,
-			`<span class="value">([0-9,]+)</span>\s*<span class="unit">تومان</span>`,
-			`class="nf">([0-9,]+)</td>\s*<td class="low">[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>[^<]*<td>[^<]*</td>`,
-		}
-		price = findPriceWithRegex(htmlContent, patterns, "alternative page")
-		if price != "" {
-			return price, nil // Found the price
-		}
-	}
-
-	// --- Calculation Fallback ---
-	log.Println("Browser attempts failed, trying calculation fallback...")
-	priceCache.mutex.RLock()
-	goldUSD := priceCache.GoldUSD
-	usdToIrrStr := priceCache.UsdToIrr
-	priceCache.mutex.RUnlock()
-
-	if goldUSD > 0 && usdToIrrStr != "" {
-		// Remove commas from USD to IRR price
-		usdToIrrStr = strings.ReplaceAll(usdToIrrStr, ",", "")
-		usdToIrr, err := strconv.ParseFloat(usdToIrrStr, 64)
-
-		if err == nil && usdToIrr > 0 {
-			// Calculate gold price in IRR (roughly)
-			gramsPerOunce := 31.1
-			goldIRRPerGram := int(goldUSD * usdToIrr / gramsPerOunce)
-			log.Printf("Calculated gold IRR price based on USD price and exchange rate: %d", goldIRRPerGram)
-			return fmt.Sprintf("%d", goldIRRPerGram), nil
-		}
-	}
-
-	return "", fmt.Errorf("couldn't find Gold price in IRR through browser or calculation")
-}
-
-// findPriceWithRegex searches htmlContent for the first matching pattern and returns the price
-func findPriceWithRegex(htmlContent string, patterns []string, pageDesc string) string {
-	for i, pattern := range patterns {
-		regex := regexp.MustCompile(pattern)
+	if price == "" {
+		// Try regex as fallback
+		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
 		matches := regex.FindStringSubmatch(htmlContent)
-		log.Printf("Trying pattern %d on %s: %s", i+1, pageDesc, pattern)
-
 		if len(matches) >= 2 {
-			price := matches[1]
-			log.Printf("Price found with pattern %d on %s: %s", i+1, pageDesc, price)
-			return price
+			price = matches[1]
+		} else {
+			return "", fmt.Errorf("couldn't find Gold price in IRR")
 		}
-
-		log.Printf("Pattern %d did not match on %s", i+1, pageDesc)
 	}
-	return "" // Not found
+
+	log.Printf("Successfully extracted Gold price in IRR: %s", price)
+	return price, nil
 }
 
 // fetchGoldIrrFallback tries to fetch Gold IRR price using HTTP requests without a browser
@@ -1123,15 +924,32 @@ func getGoldPriceInIRR() (string, error) {
 	return fetchGoldPriceInIRR()
 }
 
+// getGbpToIrrPrice returns GBP to IRR price (from cache if available)
+func getGbpToIrrPrice() (string, error) {
+	priceCache.mutex.RLock()
+	cachedPrice := priceCache.GbpToIrr
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	// If we have a valid cached price (non-empty and not too old), use it
+	if cachedPrice != "" && time.Since(lastUpdate) < 70*time.Minute {
+		return cachedPrice, nil
+	}
+
+	// Otherwise fetch fresh data
+	return fetchGbpToIrrPrice()
+}
+
 // getPriceMessage returns a formatted message with current prices
 func getPriceMessage() string {
 	bitcoinPrice, btcErr := getBitcoinPrice()
 	goldPrice, goldUsdErr := getGoldPrice()
 	usdToIrrPrice, usdIrrErr := getUsdToIrrPrice()
 	goldIrrPrice, goldIrrErr := getGoldPriceInIRR()
+	gbpToIrrPrice, gbpIrrErr := getGbpToIrrPrice()
 
 	// Check if we have at least some prices to display
-	if btcErr != nil && goldUsdErr != nil && usdIrrErr != nil && goldIrrErr != nil {
+	if btcErr != nil && goldUsdErr != nil && usdIrrErr != nil && goldIrrErr != nil && gbpIrrErr != nil {
 		return "❌ *Error*: Could not retrieve any price data. Please try again later."
 	}
 
@@ -1158,6 +976,12 @@ func getPriceMessage() string {
 		messageBuilder.WriteString(fmt.Sprintf("• *USD to IRR*: %s Rials\n", usdToIrrPrice))
 	} else {
 		messageBuilder.WriteString("• *USD to IRR*: Data unavailable\n")
+	}
+
+	if gbpIrrErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *GBP to IRR*: %s Rials\n", gbpToIrrPrice))
+	} else {
+		messageBuilder.WriteString("• *GBP to IRR*: Data unavailable\n")
 	}
 
 	if goldIrrErr == nil {
@@ -1228,6 +1052,201 @@ func setupLogging() *os.File {
 	log.Println("Logging configured successfully")
 
 	return logFile
+}
+
+// fetchGbpToIrrPrice uses chromedp to fetch GBP to IRR price with a headless browser
+func fetchGbpToIrrPrice() (string, error) {
+	log.Println("Fetching GBP to IRR price using headless browser...")
+
+	// Try fetching with browser
+	price, err := fetchGbpToIrrWithBrowser()
+	if err != nil {
+		log.Printf("Browser-based fetching failed: %v", err)
+		log.Println("Trying fallback method for GBP to IRR price...")
+		return fetchGbpToIrrFallback()
+	}
+	return price, nil
+}
+
+// fetchGbpToIrrWithBrowser uses chromedp to fetch GBP price in IRR with a headless browser
+func fetchGbpToIrrWithBrowser() (string, error) {
+	// Create a context with a longer timeout for the entire operation
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Create and clean up Chrome temp directory
+	chromeTemDir := createChromeTempDir()
+	cleanupChromeTempDirs(chromeTemDir)
+
+	// Set the TMPDIR environment variable for Chrome
+	os.Setenv("TMPDIR", chromeTemDir)
+
+	// Base chromedp options
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("single-process", true),
+		chromedp.Flag("no-zygote", true),
+		chromedp.Flag("deterministic-fetch", true),
+		// Reduce memory and disk usage
+		chromedp.Flag("aggressive-cache-discard", true),
+		chromedp.Flag("disable-cache", true),
+		chromedp.Flag("disable-application-cache", true),
+		chromedp.Flag("disable-offline-load-stale-cache", true),
+		chromedp.Flag("disable-extensions", true),
+		// Set custom temp directory via command line as well
+		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
+		chromedp.Flag("homedir", chromeTemDir),
+		// Make browser look more like a regular browser
+		chromedp.Flag("window-size", "1920,1080"),
+		chromedp.Flag("start-maximized", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+	)
+
+	// Add proxy configuration if available
+	opts = configureProxyOpts(opts)
+
+	// Set User Agent last
+	opts = append(opts, chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
+
+	// Add Chrome path if available
+	if browserPath := getBrowserPath(); browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+		log.Printf("Using browser at path: %s", browserPath)
+	} else {
+		log.Println("No specific browser path set, letting chromedp find browser automatically")
+	}
+
+	// Create browser context with error handling
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+
+	// Create browser context with custom timeout for browser startup
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second)
+	defer browserCancel()
+
+	taskCtx, taskCancel := chromedp.NewContext(
+		browserCtx,
+		chromedp.WithLogf(log.Printf),
+		chromedp.WithErrorf(log.Printf),
+	)
+	defer taskCancel()
+
+	// Try a simple navigation to ensure browser starts correctly
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+		log.Printf("ERROR initializing browser: %v", err)
+		return "", fmt.Errorf("failed to initialize browser: %v", err)
+	}
+
+	var price string
+	var htmlContent string
+
+	// Navigate to the page and extract price
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate("https://mazaneh.net/fa"),
+		chromedp.Sleep(5*time.Second),
+		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Println("Page loaded, searching for price element...")
+			return nil
+		}),
+		// Try to get GBP price using the new selector
+		chromedp.Text(`div#Div3 .CurrencyPrice`, &price, chromedp.ByQuery, chromedp.NodeVisible),
+	)
+
+	if err != nil {
+		if strings.Contains(err.Error(), "net::ERR") && os.Getenv("TGJU_PROXY") != "" {
+			log.Printf("⚠️ PROXY ERROR suspected: Could not navigate: %v", err)
+			return "", fmt.Errorf("proxy connection failed or navigation error: %v", err)
+		}
+		return "", fmt.Errorf("failed to navigate or find price element: %v", err)
+	}
+
+	if price == "" {
+		// Try regex as fallback
+		regex := regexp.MustCompile(`<div class="CurrencyPrice">([0-9,]+)</div>`)
+		matches := regex.FindStringSubmatch(htmlContent)
+		if len(matches) >= 2 {
+			price = matches[1]
+		} else {
+			return "", fmt.Errorf("couldn't find GBP price in IRR")
+		}
+	}
+
+	log.Printf("Successfully extracted GBP price in IRR: %s", price)
+	return price, nil
+}
+
+// fetchGbpToIrrFallback tries to fetch GBP IRR price using HTTP requests without a browser
+func fetchGbpToIrrFallback() (string, error) {
+	log.Println("Using HTTP fallback method to fetch GBP IRR price...")
+
+	// Try multiple approaches
+	urls := []string{
+		"https://mazaneh.net/fa",
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Check if a proxy is configured
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			transport := &http.Transport{
+				Proxy: http.ProxyURL(proxy),
+			}
+			client.Transport = transport
+			log.Printf("Using proxy for HTTP fallback: %s", proxyURL)
+		}
+	}
+
+	// Try each URL
+	for _, urlStr := range urls {
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
+			continue
+		}
+
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Request to %s failed: %v", urlStr, err)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to read response from %s: %v", urlStr, err)
+			continue
+		}
+
+		// Try different regex patterns to extract the price
+		patterns := []string{
+			`<div id="Div3"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
+			`<div class="CurrencyPrice">([0-9,]+)</div>`,
+		}
+
+		for _, pattern := range patterns {
+			regex := regexp.MustCompile(pattern)
+			matches := regex.FindStringSubmatch(string(body))
+			if len(matches) >= 2 {
+				log.Printf("GBP IRR price found with fallback method: %s", matches[1])
+				return matches[1], nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("all fallback methods failed to fetch GBP IRR price")
 }
 
 func main() {
