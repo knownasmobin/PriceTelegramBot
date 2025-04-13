@@ -1288,13 +1288,13 @@ func getPriceMessage() string {
 	// Global prices section
 	messageBuilder.WriteString("🌎 *Global Markets*:\n")
 	if btcErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Bitcoin*: $%.2f\n", bitcoinPrice))
+		messageBuilder.WriteString(fmt.Sprintf("• *Bitcoin*: %.2f USD\n", bitcoinPrice))
 	} else {
 		messageBuilder.WriteString("• *Bitcoin*: Data unavailable\n")
 	}
 
 	if goldUsdErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Gold* (per ounce): $%.2f\n", goldPrice))
+		messageBuilder.WriteString(fmt.Sprintf("• *Gold* (per ounce): %.2f USD\n", goldPrice))
 	} else {
 		messageBuilder.WriteString("• *Gold* (per ounce): Data unavailable\n")
 	}
@@ -1302,21 +1302,21 @@ func getPriceMessage() string {
 	// Iranian market section
 	messageBuilder.WriteString("\n🇮🇷 *Iranian Market*:\n")
 	if usdIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *USD to IRR*: %s Rials\n", usdToIrrPrice))
+		messageBuilder.WriteString(fmt.Sprintf("• *USD to IRT*: %s Tomans\n", usdToIrrPrice))
 	} else {
-		messageBuilder.WriteString("• *USD to IRR*: Data unavailable\n")
+		messageBuilder.WriteString("• *USD to IRT*: Data unavailable\n")
 	}
 
 	if gbpIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *GBP to IRR*: %s Rials\n", gbpToIrrPrice))
+		messageBuilder.WriteString(fmt.Sprintf("• *GBP to IRT*: %s Tomans\n", gbpToIrrPrice))
 	} else {
-		messageBuilder.WriteString("• *GBP to IRR*: Data unavailable\n")
+		messageBuilder.WriteString("• *GBP to IRT*: Data unavailable\n")
 	}
 
 	if goldIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Gold in IRR*: %s Rials\n", goldIrrPrice))
+		messageBuilder.WriteString(fmt.Sprintf("• *Gold in IRT*: %s Tomans\n", goldIrrPrice))
 	} else {
-		messageBuilder.WriteString("• *Gold in IRR*: Data unavailable\n")
+		messageBuilder.WriteString("• *Gold in IRT*: Data unavailable\n")
 	}
 
 	// Get the cache update time
@@ -1332,7 +1332,7 @@ func getPriceMessage() string {
 	}
 
 	// Footer with timestamps
-	messageBuilder.WriteString(fmt.Sprintf("\n_Cache last updated: %s_", updateTimeStr))
+	messageBuilder.WriteString(fmt.Sprintf("\n_Cache last updated: %s_ GMT", updateTimeStr))
 
 	return messageBuilder.String()
 }
@@ -1674,7 +1674,7 @@ func main() {
 				priceCache.mutex.RUnlock()
 
 				if !lastUpdate.IsZero() {
-					msg.Text += fmt.Sprintf("\n\n📊 Price cache last updated: %s", lastUpdate.Format("2006-01-02 15:04:05"))
+					msg.Text += fmt.Sprintf("\n\n📊 Price cache last updated: %s GMT", lastUpdate.Format("2006-01-02 15:04:05"))
 				} else {
 					msg.Text += "\n\n📊 Price cache has not been updated yet."
 				}
