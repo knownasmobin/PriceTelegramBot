@@ -645,8 +645,8 @@ func fetchUsdToIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
+			`<div id="USD"[^>]*>.*?<div class="EnglishTitle">USD</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 			`<div id="USD"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -856,8 +856,8 @@ func fetchGoldIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
+			`<div id="Div38"[^>]*>.*?<div class="EnglishTitle">Gold</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 			`<div id="Div38"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
@@ -1197,8 +1197,8 @@ func fetchGbpToIrrFallback() (string, error) {
 
 		// Try different regex patterns to extract the price
 		patterns := []string{
+			`<div id="Div3"[^>]*>.*?<div class="EnglishTitle">GBP</div>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
 			`<div id="Div3"[^>]*>.*?<div class="CurrencyPrice">([0-9,]+)</div>`,
-			`<div class="CurrencyPrice">([0-9,]+)</div>`,
 		}
 
 		for _, pattern := range patterns {
