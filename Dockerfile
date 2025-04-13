@@ -38,6 +38,12 @@ RUN test -f $CHROME_BIN && echo "Chrome installation verified at $CHROME_BIN"
 
 # Create non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Create and set proper permissions for temporary directories
+RUN mkdir -p /app/tmp /app/data /app/logs \
+    && chown -R appuser:appgroup /app
+
+# Switch to non-root user
 USER appuser
 
 WORKDIR /app

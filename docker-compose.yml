@@ -10,4 +10,12 @@ services:
     env_file:
       - .env
     volumes:
-      - ./logs:/root/logs 
+      - ./logs:/app/logs
+      - ./data:/app/data
+    tmpfs:
+      - /app/tmp:size=100M,exec,uid=100,gid=101
+    # Add resource constraints to prevent container from using all disk space
+    deploy:
+      resources:
+        limits:
+          memory: 500M 

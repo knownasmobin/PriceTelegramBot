@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -351,13 +352,88 @@ func getBrowserPath() string {
 	return ""
 }
 
+// createChromeTempDir creates a custom temp directory for Chrome with sufficient space
+func createChromeTempDir() string {
+	// Try different locations in order of preference
+	locations := []string{
+		"/app/tmp",   // Custom app directory
+		"./tmp",      // Local directory
+		"/var/tmp",   // Alternative system temp
+		os.TempDir(), // Default system temp
+	}
+
+	for _, location := range locations {
+		// Create the directory if it doesn't exist
+		if err := os.MkdirAll(location, 0755); err == nil {
+			// Test if we can write to it
+			testFile := filepath.Join(location, "chrome-test")
+			if testErr := os.WriteFile(testFile, []byte("test"), 0644); testErr == nil {
+				os.Remove(testFile) // Clean up test file
+				log.Printf("Using %s for Chrome temporary directory", location)
+				return location
+			}
+		}
+	}
+
+	// If all else fails, try to use the current working directory
+	log.Println("Warning: Could not create a suitable Chrome temp directory, using current directory")
+	return "."
+}
+
+// cleanupChromeTempDirs cleans up old Chrome temporary directories
+func cleanupChromeTempDirs(dir string) {
+	// Skip cleanup if we're using the default temp dir
+	if dir == os.TempDir() || dir == "." {
+		return
+	}
+
+	pattern := filepath.Join(dir, "chromedp-runner*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		log.Printf("Error finding Chrome temp directories: %v", err)
+		return
+	}
+
+	for _, match := range matches {
+		// Only remove directories older than 1 hour
+		info, err := os.Stat(match)
+		if err != nil {
+			continue
+		}
+
+		if time.Since(info.ModTime()) > 1*time.Hour {
+			log.Printf("Cleaning up old Chrome temp directory: %s", match)
+			os.RemoveAll(match)
+		}
+	}
+}
+
 // fetchUsdToIrrPrice uses chromedp to fetch USD to IRR price with a headless browser
 func fetchUsdToIrrPrice() (string, error) {
 	log.Println("Fetching USD to IRR price using headless browser...")
 
+	// Try fetching with browser
+	price, err := fetchUsdToIrrWithBrowser()
+	if err != nil {
+		log.Printf("Browser-based fetching failed: %v", err)
+		log.Println("Trying fallback method for USD to IRR price...")
+		return fetchUsdToIrrFallback()
+	}
+	return price, nil
+}
+
+// fetchUsdToIrrWithBrowser uses chromedp to fetch USD to IRR price with a headless browser
+func fetchUsdToIrrWithBrowser() (string, error) {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Create and clean up Chrome temp directory
+	chromeTemDir := createChromeTempDir()
+	cleanupChromeTempDirs(chromeTemDir)
+
+	// Set the TMPDIR environment variable for Chrome
+	os.Setenv("TMPDIR", chromeTemDir)
 
 	// Default chromedp options with additional flags for stability in Docker
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -369,6 +445,15 @@ func fetchUsdToIrrPrice() (string, error) {
 		chromedp.Flag("single-process", true),
 		chromedp.Flag("no-zygote", true),
 		chromedp.Flag("deterministic-fetch", true),
+		// Reduce memory and disk usage
+		chromedp.Flag("aggressive-cache-discard", true),
+		chromedp.Flag("disable-cache", true),
+		chromedp.Flag("disable-application-cache", true),
+		chromedp.Flag("disable-offline-load-stale-cache", true),
+		chromedp.Flag("disable-extensions", true),
+		// Set custom temp directory via command line as well
+		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
+		chromedp.Flag("homedir", chromeTemDir),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
 
@@ -480,6 +565,81 @@ func fetchUsdToIrrPrice() (string, error) {
 	return price, nil
 }
 
+// fetchUsdToIrrFallback tries to fetch USD to IRR price using HTTP requests without a browser
+func fetchUsdToIrrFallback() (string, error) {
+	log.Println("Using HTTP fallback method to fetch USD to IRR price...")
+
+	// Try multiple approaches
+	urls := []string{
+		"https://www.tgju.org/profile/price_dollar_rl",
+		"https://www.tgju.org/profile/price_dollar_rl/ajax",
+		"https://call3.tgju.org/ajax.json",
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Check if a proxy is configured
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			transport := &http.Transport{
+				Proxy: http.ProxyURL(proxy),
+			}
+			client.Transport = transport
+			log.Printf("Using proxy for HTTP fallback: %s", proxyURL)
+		}
+	}
+
+	// Try each URL
+	for _, urlStr := range urls {
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
+			continue
+		}
+
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Request to %s failed: %v", urlStr, err)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to read response from %s: %v", urlStr, err)
+			continue
+		}
+
+		// Try different regex patterns to extract the price
+		patterns := []string{
+			`price_dollar_rl"[^>]*>.*?<span[^>]*>([0-9,]+)</span>`,
+			`"price_dollar_rl"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
+			`<div class="value">.*?([0-9,]+).*?</div>`,
+			`"p":([0-9]+)`,
+			`"price":([0-9]+)`,
+			`"price":"([0-9,]+)"`,
+		}
+
+		for _, pattern := range patterns {
+			regex := regexp.MustCompile(pattern)
+			matches := regex.FindStringSubmatch(string(body))
+			if len(matches) >= 2 {
+				log.Printf("USD to IRR price found with fallback method: %s", matches[1])
+				return matches[1], nil
+			}
+		}
+	}
+
+	// If we got this far, the fallback methods also failed
+	return "", fmt.Errorf("all fallback methods failed to fetch USD to IRR price")
+}
+
 // getUsdToIrrPrice returns USD to IRR price (from cache if available)
 func getUsdToIrrPrice() (string, error) {
 	priceCache.mutex.RLock()
@@ -500,9 +660,28 @@ func getUsdToIrrPrice() (string, error) {
 func fetchGoldPriceInIRR() (string, error) {
 	log.Println("Fetching Gold IRR price using headless browser...")
 
+	// Try fetching with browser
+	price, err := fetchGoldIrrWithBrowser()
+	if err != nil {
+		log.Printf("Browser-based fetching failed: %v", err)
+		log.Println("Trying fallback method for Gold IRR price...")
+		return fetchGoldIrrFallback()
+	}
+	return price, nil
+}
+
+// fetchGoldIrrWithBrowser uses chromedp to fetch Gold price in IRR with a headless browser
+func fetchGoldIrrWithBrowser() (string, error) {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Create and clean up Chrome temp directory
+	chromeTemDir := createChromeTempDir()
+	cleanupChromeTempDirs(chromeTemDir)
+
+	// Set the TMPDIR environment variable for Chrome
+	os.Setenv("TMPDIR", chromeTemDir)
 
 	// Default chromedp options with additional flags for stability in Docker
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -514,6 +693,15 @@ func fetchGoldPriceInIRR() (string, error) {
 		chromedp.Flag("single-process", true),
 		chromedp.Flag("no-zygote", true),
 		chromedp.Flag("deterministic-fetch", true),
+		// Reduce memory and disk usage
+		chromedp.Flag("aggressive-cache-discard", true),
+		chromedp.Flag("disable-cache", true),
+		chromedp.Flag("disable-application-cache", true),
+		chromedp.Flag("disable-offline-load-stale-cache", true),
+		chromedp.Flag("disable-extensions", true),
+		// Set custom temp directory via command line as well
+		chromedp.Flag("disk-cache-dir", filepath.Join(chromeTemDir, "cache")),
+		chromedp.Flag("homedir", chromeTemDir),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
 
@@ -761,6 +949,102 @@ func fetchGoldPriceInIRR() (string, error) {
 	}
 
 	return "", fmt.Errorf("couldn't find Gold price in IRR in any webpage")
+}
+
+// fetchGoldIrrFallback tries to fetch Gold IRR price using HTTP requests without a browser
+func fetchGoldIrrFallback() (string, error) {
+	log.Println("Using HTTP fallback method to fetch Gold IRR price...")
+
+	// Try multiple approaches
+	urls := []string{
+		"https://www.tgju.org/profile/geram18",
+		"https://www.tgju.org/profile/geram18/ajax",
+		"https://call3.tgju.org/ajax.json",
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Check if a proxy is configured
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			transport := &http.Transport{
+				Proxy: http.ProxyURL(proxy),
+			}
+			client.Transport = transport
+			log.Printf("Using proxy for HTTP fallback: %s", proxyURL)
+		}
+	}
+
+	// Try each URL
+	for _, urlStr := range urls {
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
+			continue
+		}
+
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Request to %s failed: %v", urlStr, err)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to read response from %s: %v", urlStr, err)
+			continue
+		}
+
+		// Try different regex patterns to extract the price
+		patterns := []string{
+			`geram18"[^>]*>.*?<span[^>]*>([0-9,]+)</span>`,
+			`"geram18"[^>]*>.*?<td class="nf">([0-9,]+)</td>`,
+			`<div class="value">.*?([0-9,]+).*?</div>`,
+			`"geram18"[^>]*>.*?data-val="([0-9,]+)"`,
+			`"p":([0-9]+)`,
+			`"price":([0-9]+)`,
+			`"price":"([0-9,]+)"`,
+		}
+
+		for _, pattern := range patterns {
+			regex := regexp.MustCompile(pattern)
+			matches := regex.FindStringSubmatch(string(body))
+			if len(matches) >= 2 {
+				log.Printf("Gold IRR price found with fallback method: %s", matches[1])
+				return matches[1], nil
+			}
+		}
+	}
+
+	// Calculate based on USD gold price and exchange rate as last resort
+	priceCache.mutex.RLock()
+	goldUSD := priceCache.GoldUSD
+	usdToIrrStr := priceCache.UsdToIrr
+	priceCache.mutex.RUnlock()
+
+	if goldUSD > 0 && usdToIrrStr != "" {
+		// Remove commas from USD to IRR price
+		usdToIrrStr = strings.ReplaceAll(usdToIrrStr, ",", "")
+		usdToIrr, err := strconv.ParseFloat(usdToIrrStr, 64)
+
+		if err == nil && usdToIrr > 0 {
+			// Calculate gold price in IRR (roughly)
+			// Adjust for gram (1 troy oz = 31.1 grams)
+			gramsPerOunce := 31.1
+			goldIRRPerGram := int(goldUSD * usdToIrr / gramsPerOunce)
+			log.Printf("Calculated gold IRR price based on USD price and exchange rate: %d", goldIRRPerGram)
+			return fmt.Sprintf("%d", goldIRRPerGram), nil
+		}
+	}
+
+	return "", fmt.Errorf("all fallback methods failed to fetch Gold IRR price")
 }
 
 // getGoldPriceInIRR returns Gold price in IRR (from cache if available)
