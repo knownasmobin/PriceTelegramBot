@@ -417,7 +417,9 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 	if proxyURL != "" {
 		log.Printf("Attempting to use proxy for tgju.org: %s", proxyURL)
 
-		// Basic URL validation for logging
+		proxyURLForFlag := proxyURL // Store the original for logging/potential future use
+
+		// Basic URL validation and potentially strip userinfo for the flag
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {
 			log.Printf("⚠️ Warning: Error parsing proxy URL: %v - Will attempt to use as is.", err)
@@ -425,6 +427,10 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 			log.Printf("Parsed proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
 			if parsedURL.User != nil {
 				log.Printf("Proxy authentication: likely enabled")
+				// Strip userinfo for the --proxy-server flag
+				parsedURL.User = nil
+				proxyURLForFlag = parsedURL.String()
+				log.Printf("Stripped credentials for --proxy-server flag: %s", proxyURLForFlag)
 			} else {
 				log.Printf("Proxy authentication: likely disabled")
 			}
@@ -434,9 +440,9 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 			}
 		}
 
-		log.Printf("Applying proxy to chromedp via command-line flag --proxy-server='%s'", proxyURL) // Log exact value being used
-		// Add proxy using the command-line flag method
-		opts = append(opts, chromedp.Flag("proxy-server", proxyURL))
+		log.Printf("Applying proxy to chromedp via command-line flag --proxy-server='%s'", proxyURLForFlag) // Log exact value being used for the flag
+		// Add proxy using the command-line flag method (without userinfo)
+		opts = append(opts, chromedp.Flag("proxy-server", proxyURLForFlag))
 
 		// Restore ignore-certificate-errors flag, often needed for proxies
 		opts = append(opts,
