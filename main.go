@@ -411,30 +411,37 @@ func cleanupChromeTempDirs(dir string) {
 
 // configureProxyOpts adds proxy settings to chromedp options if TGJU_PROXY is set
 func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllocatorOption {
-	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
-		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+	proxyURL := os.Getenv("TGJU_PROXY")
+	log.Printf("Raw TGJU_PROXY env var: '%s'", proxyURL) // Log raw value
+
+	if proxyURL != "" {
+		log.Printf("Attempting to use proxy for tgju.org: %s", proxyURL)
 
 		// Basic URL validation for logging
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {
-			log.Printf("⚠️ Potential issue with proxy URL format: %v", err)
+			log.Printf("⚠️ Warning: Error parsing proxy URL: %v - Will attempt to use as is.", err)
 		} else {
-			log.Printf("Proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
+			log.Printf("Parsed proxy scheme: %s, host: %s", parsedURL.Scheme, parsedURL.Host)
 			if parsedURL.User != nil {
 				log.Printf("Proxy authentication: likely enabled")
 			} else {
 				log.Printf("Proxy authentication: likely disabled")
 			}
+			// Ensure the scheme is http or https if parsed correctly
+			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+				log.Printf("⚠️ Warning: Proxy scheme is not 'http' or 'https'. Chromedp might have issues.")
+			}
 		}
 
+		log.Printf("Applying proxy to chromedp via ProxyServer: '%s'", proxyURL) // Log exact value being used
 		// Add proxy using the recommended programmatic way
 		opts = append(opts, chromedp.ProxyServer(proxyURL))
 
-		// Keep flags potentially useful for proxies
-		opts = append(opts,
-			chromedp.Flag("ignore-certificate-errors", true), // Helps with proxies that intercept TLS
-			// chromedp.Flag("proxy-bypass-list", "") // Optional: Explicitly disable bypass
-		)
+		// Temporarily remove ignore-certificate-errors for testing
+		// opts = append(opts,
+		// 	 chromedp.Flag("ignore-certificate-errors", true),
+		// )
 	}
 	return opts
 }
