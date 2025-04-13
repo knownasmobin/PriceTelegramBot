@@ -9,6 +9,7 @@ A simple Telegram bot written in Go that fetches the current price of Bitcoin an
 - Get USD to IRR exchange rate
 - Get Gold price in IRR (Iranian Rials)
 - Get all prices at once
+- Hourly automatic price updates (price cache refreshes every hour)
 - Subscribe to automatic price updates at custom intervals
 - Use in both private chats and group chats/channels
 
@@ -21,9 +22,19 @@ A simple Telegram bot written in Go that fetches the current price of Bitcoin an
 - `/gold` - Get Gold price in USD
 - `/usd` - Get USD to IRR exchange rate
 - `/goldirr` - Get Gold price in IRR
+- `/refresh` - Force refresh of all price data
 - `/subscribe <minutes>` - Subscribe to price updates (e.g., `/subscribe 30` for updates every 30 minutes)
 - `/unsubscribe` - Stop receiving price updates
-- `/status` - Check subscription status
+- `/status` - Check subscription status and cache information
+
+## How Price Caching Works
+
+The bot automatically fetches and caches all price data:
+
+1. **Hourly Updates**: The price data is automatically refreshed at the top of each hour
+2. **Command Responses**: All price commands first check the cache before fetching fresh data
+3. **Cache Validity**: Cached data is considered valid for up to 70 minutes
+4. **Manual Refresh**: You can force a cache refresh with the `/refresh` command
 
 ## Group/Channel Usage
 
@@ -97,9 +108,9 @@ docker-compose down
 
 For production use, you might want to:
 - Add error handling for API rate limits
-- Implement caching to avoid excessive API calls
-- Add logging and monitoring
-- Use a more robust environment configuration
+- Implement database storage for the price cache
+- Add monitoring for failed scraping attempts
+- Set up a proxy for more reliable access to the websites being scraped
 - Persist subscriptions to a database to survive bot restarts
 
 ## Project Structure

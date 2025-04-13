@@ -17,6 +17,150 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// PriceCache stores cached price data
+type PriceCache struct {
+	BitcoinUSD float64
+	GoldUSD    float64
+	UsdToIrr   string
+	GoldIrr    string
+	LastUpdate time.Time
+	mutex      sync.RWMutex
+}
+
+// Global cache instance
+var priceCache = PriceCache{
+	LastUpdate: time.Time{}, // Zero time (never updated)
+}
+
+func (pc *PriceCache) updateBitcoinPrice() error {
+	price, err := fetchBitcoinPrice()
+	if err != nil {
+		return err
+	}
+
+	pc.mutex.Lock()
+	pc.BitcoinUSD = price
+	pc.mutex.Unlock()
+	return nil
+}
+
+func (pc *PriceCache) updateGoldPrice() error {
+	price, err := fetchGoldPrice()
+	if err != nil {
+		return err
+	}
+
+	pc.mutex.Lock()
+	pc.GoldUSD = price
+	pc.mutex.Unlock()
+	return nil
+}
+
+func (pc *PriceCache) updateUsdToIrrPrice() error {
+	price, err := fetchUsdToIrrPrice()
+	if err != nil {
+		return err
+	}
+
+	pc.mutex.Lock()
+	pc.UsdToIrr = price
+	pc.mutex.Unlock()
+	return nil
+}
+
+func (pc *PriceCache) updateGoldIrrPrice() error {
+	price, err := fetchGoldPriceInIRR()
+	if err != nil {
+		return err
+	}
+
+	pc.mutex.Lock()
+	pc.GoldIrr = price
+	pc.mutex.Unlock()
+	return nil
+}
+
+// refreshCache updates all cached prices
+func (pc *PriceCache) refreshCache() {
+	log.Println("Refreshing price cache...")
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	// Update Bitcoin price
+	go func() {
+		defer wg.Done()
+		if err := pc.updateBitcoinPrice(); err != nil {
+			log.Printf("Error updating Bitcoin price: %v", err)
+		} else {
+			log.Println("Bitcoin price updated successfully")
+		}
+	}()
+
+	// Update Gold price
+	go func() {
+		defer wg.Done()
+		if err := pc.updateGoldPrice(); err != nil {
+			log.Printf("Error updating Gold price: %v", err)
+		} else {
+			log.Println("Gold price updated successfully")
+		}
+	}()
+
+	// Update USD to IRR exchange rate
+	go func() {
+		defer wg.Done()
+		if err := pc.updateUsdToIrrPrice(); err != nil {
+			log.Printf("Error updating USD to IRR exchange rate: %v", err)
+		} else {
+			log.Println("USD to IRR exchange rate updated successfully")
+		}
+	}()
+
+	// Update Gold IRR price
+	go func() {
+		defer wg.Done()
+		if err := pc.updateGoldIrrPrice(); err != nil {
+			log.Printf("Error updating Gold IRR price: %v", err)
+		} else {
+			log.Println("Gold IRR price updated successfully")
+		}
+	}()
+
+	// Wait for all updates to complete
+	wg.Wait()
+
+	// Update last update time
+	pc.mutex.Lock()
+	pc.LastUpdate = time.Now()
+	pc.mutex.Unlock()
+
+	log.Println("Price cache refresh completed")
+}
+
+// StartCacheRefresher starts a goroutine to refresh the cache periodically
+func StartCacheRefresher() {
+	// First immediate refresh
+	priceCache.refreshCache()
+
+	// Start periodic refresher at the top of each hour
+	go func() {
+		for {
+			// Calculate time until the next hour
+			now := time.Now()
+			nextHour := now.Truncate(time.Hour).Add(time.Hour)
+			duration := nextHour.Sub(now)
+
+			// Wait until the next hour
+			log.Printf("Next cache refresh scheduled in %v (at %s)", duration, nextHour.Format("15:04:05"))
+			time.Sleep(duration)
+
+			// Refresh the cache
+			priceCache.refreshCache()
+		}
+	}()
+}
+
 type CoinGeckoResponse struct {
 	Bitcoin struct {
 		USD float64 `json:"usd"`
@@ -90,7 +234,8 @@ func (sm *SubscriptionManager) GetAllSubscriptions() []*Subscription {
 	return subs
 }
 
-func getBitcoinPrice() (float64, error) {
+// fetchBitcoinPrice fetches the current Bitcoin price from API
+func fetchBitcoinPrice() (float64, error) {
 	url := "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -108,7 +253,24 @@ func getBitcoinPrice() (float64, error) {
 	return response.Bitcoin.USD, nil
 }
 
-func getGoldPrice() (float64, error) {
+// getBitcoinPrice returns Bitcoin price (from cache if available)
+func getBitcoinPrice() (float64, error) {
+	priceCache.mutex.RLock()
+	cachedPrice := priceCache.BitcoinUSD
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	// If we have a valid cached price (non-zero and not too old), use it
+	if cachedPrice > 0 && time.Since(lastUpdate) < 70*time.Minute {
+		return cachedPrice, nil
+	}
+
+	// Otherwise fetch fresh data
+	return fetchBitcoinPrice()
+}
+
+// fetchGoldPrice fetches the current Gold price from API
+func fetchGoldPrice() (float64, error) {
 	// Using Metals API which provides gold price per troy ounce in USD
 	// This API endpoint doesn't require authentication for limited use
 	url := "https://api.metals.live/v1/spot/gold"
@@ -136,8 +298,24 @@ func getGoldPrice() (float64, error) {
 	return response[0].Price, nil
 }
 
-// getUsdToIrrPrice scrapes the USD to IRR exchange rate from tgju.org
-func getUsdToIrrPrice() (string, error) {
+// getGoldPrice returns Gold price (from cache if available)
+func getGoldPrice() (float64, error) {
+	priceCache.mutex.RLock()
+	cachedPrice := priceCache.GoldUSD
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	// If we have a valid cached price (non-zero and not too old), use it
+	if cachedPrice > 0 && time.Since(lastUpdate) < 70*time.Minute {
+		return cachedPrice, nil
+	}
+
+	// Otherwise fetch fresh data
+	return fetchGoldPrice()
+}
+
+// fetchUsdToIrrPrice scrapes the USD to IRR exchange rate from tgju.org
+func fetchUsdToIrrPrice() (string, error) {
 	url := "https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -192,8 +370,24 @@ func getUsdToIrrPrice() (string, error) {
 	return price, nil
 }
 
-// getGoldPriceInIRR scrapes the gold price in IRR from tgju.org
-func getGoldPriceInIRR() (string, error) {
+// getUsdToIrrPrice returns USD to IRR price (from cache if available)
+func getUsdToIrrPrice() (string, error) {
+	priceCache.mutex.RLock()
+	cachedPrice := priceCache.UsdToIrr
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	// If we have a valid cached price (non-empty and not too old), use it
+	if cachedPrice != "" && time.Since(lastUpdate) < 70*time.Minute {
+		return cachedPrice, nil
+	}
+
+	// Otherwise fetch fresh data
+	return fetchUsdToIrrPrice()
+}
+
+// fetchGoldPriceInIRR scrapes the gold price in IRR from tgju.org
+func fetchGoldPriceInIRR() (string, error) {
 	url := "https://www.tgju.org/gold-chart"
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -247,6 +441,22 @@ func getGoldPriceInIRR() (string, error) {
 	return price, nil
 }
 
+// getGoldPriceInIRR returns Gold price in IRR (from cache if available)
+func getGoldPriceInIRR() (string, error) {
+	priceCache.mutex.RLock()
+	cachedPrice := priceCache.GoldIrr
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	// If we have a valid cached price (non-empty and not too old), use it
+	if cachedPrice != "" && time.Since(lastUpdate) < 70*time.Minute {
+		return cachedPrice, nil
+	}
+
+	// Otherwise fetch fresh data
+	return fetchGoldPriceInIRR()
+}
+
 // getPriceMessage returns a formatted message with current prices
 func getPriceMessage() string {
 	bitcoinPrice, btcErr := getBitcoinPrice()
@@ -290,8 +500,20 @@ func getPriceMessage() string {
 		messageBuilder.WriteString("• *Gold in IRR*: Data unavailable\n")
 	}
 
-	// Footer with timestamp
-	messageBuilder.WriteString(fmt.Sprintf("\n_Updated: %s_", time.Now().Format("2006-01-02 15:04:05")))
+	// Get the cache update time
+	priceCache.mutex.RLock()
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	var updateTimeStr string
+	if lastUpdate.IsZero() {
+		updateTimeStr = time.Now().Format("2006-01-02 15:04:05")
+	} else {
+		updateTimeStr = lastUpdate.Format("2006-01-02 15:04:05")
+	}
+
+	// Footer with timestamps
+	messageBuilder.WriteString(fmt.Sprintf("\n_Cache last updated: %s_", updateTimeStr))
 
 	return messageBuilder.String()
 }
@@ -350,6 +572,10 @@ func main() {
 	}
 
 	log.Println("Starting Price Telegram Bot")
+
+	// Start the cache refresher
+	log.Println("Starting hourly price cache refresher")
+	StartCacheRefresher()
 
 	// Get bot token from environment variable
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -421,7 +647,8 @@ func main() {
 					"/goldirr - Get Gold price in IRR\n" +
 					"/subscribe <minutes> - Subscribe to price updates (e.g. /subscribe 30 for updates every 30 minutes)\n" +
 					"/unsubscribe - Stop receiving price updates\n" +
-					"/status - Check subscription status"
+					"/status - Check subscription status\n" +
+					"/refresh - Force refresh of price data"
 			case "price":
 				msg.Text = getPriceMessage()
 			case "bitcoin":
@@ -452,6 +679,9 @@ func main() {
 					break
 				}
 				msg.Text = fmt.Sprintf("🔸 *Gold in IRR*: %s Rials", goldIrrPrice)
+			case "refresh":
+				go priceCache.refreshCache()
+				msg.Text = "🔄 Refreshing price data. This may take a few seconds. Use /price to check the updated data."
 			case "subscribe":
 				// Default interval is 60 minutes
 				interval := 60 * time.Minute
@@ -489,6 +719,17 @@ func main() {
 					msg.Text = fmt.Sprintf("✅ This chat is subscribed to receive price updates every %d minutes.", minutes)
 				} else {
 					msg.Text = "ℹ️ This chat is not subscribed to price updates. Use /subscribe to start receiving updates."
+				}
+
+				// Add cache status information
+				priceCache.mutex.RLock()
+				lastUpdate := priceCache.LastUpdate
+				priceCache.mutex.RUnlock()
+
+				if !lastUpdate.IsZero() {
+					msg.Text += fmt.Sprintf("\n\n📊 Price cache last updated: %s", lastUpdate.Format("2006-01-02 15:04:05"))
+				} else {
+					msg.Text += "\n\n📊 Price cache has not been updated yet."
 				}
 
 			default:
