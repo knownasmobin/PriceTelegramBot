@@ -1,3 +1,4 @@
+# Build stage
 FROM golang:1.22.3-alpine AS builder
 
 # Set the working directory inside the container
@@ -13,18 +14,37 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o pricetelegrambot .
+RUN go build -o telegram-bot
 
-# Create a minimal image for running the application
-FROM alpine:latest  
+# Runtime stage
+FROM alpine:latest
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install required dependencies for chromium
+RUN apk update && apk add --no-cache \
+    ca-certificates \
+    chromium \
+    fontconfig \
+    font-noto \
+    ttf-freefont \
+    tini \
+    && rm -rf /var/cache/apk/*
 
-WORKDIR /root/
+# Set environment variables
+ENV DOCKER_CONTAINER=1
+ENV CHROME_BIN=/usr/bin/chromium-browser
 
-# Copy the binary from builder
-COPY --from=builder /app/pricetelegrambot .
+# Verify Chrome is installed and accessible
+RUN test -f $CHROME_BIN && echo "Chrome installation verified at $CHROME_BIN"
 
-# Set the command to run the application
-CMD ["./pricetelegrambot"] 
+# Create non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+WORKDIR /app
+
+# Copy binary from builder stage
+COPY --from=builder /app/telegram-bot /app/
+
+# Use tini as init system
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/app/telegram-bot"] 

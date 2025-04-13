@@ -316,7 +316,42 @@ func getGoldPrice() (float64, error) {
 	return fetchGoldPrice()
 }
 
-// fetchUsdToIrrPriceHeadless uses chromedp to fetch USD to IRR price with a headless browser
+// getBrowserPath returns the Chrome executable path based on environment
+func getBrowserPath() string {
+	// First check if CHROME_BIN environment variable is set
+	if chromeBin := os.Getenv("CHROME_BIN"); chromeBin != "" {
+		if _, err := os.Stat(chromeBin); err == nil {
+			log.Printf("Using Chrome binary from CHROME_BIN env var: %s", chromeBin)
+			return chromeBin
+		}
+		log.Printf("Warning: CHROME_BIN env var set to %s but file not found", chromeBin)
+	}
+
+	// Check if running in Docker (common environment variable in containers)
+	if os.Getenv("DOCKER_CONTAINER") != "" || os.Getenv("CONTAINER_NAME") != "" {
+		// Standard location for Chrome/Chromium in Alpine/Debian containers
+		paths := []string{
+			"/usr/bin/chromium-browser",
+			"/usr/bin/chromium",
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+		}
+
+		for _, path := range paths {
+			if _, err := os.Stat(path); err == nil {
+				log.Printf("Found browser at %s", path)
+				return path
+			}
+		}
+
+		log.Println("No Chrome/Chromium installation found in container!")
+	}
+
+	// When not in container, let chromedp find the browser automatically
+	return ""
+}
+
+// fetchUsdToIrrPrice uses chromedp to fetch USD to IRR price with a headless browser
 func fetchUsdToIrrPrice() (string, error) {
 	log.Println("Fetching USD to IRR price using headless browser...")
 
@@ -324,14 +359,26 @@ func fetchUsdToIrrPrice() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Default chromedp options
+	// Default chromedp options with additional flags for stability in Docker
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("single-process", true),
+		chromedp.Flag("no-zygote", true),
+		chromedp.Flag("deterministic-fetch", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
+
+	// Add Chrome path if available
+	if browserPath := getBrowserPath(); browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+		log.Printf("Using browser at path: %s", browserPath)
+	} else {
+		log.Println("No specific browser path set, letting chromedp find browser automatically")
+	}
 
 	// Check if a proxy is configured for tgju.org
 	proxyEnabled := false
@@ -341,16 +388,26 @@ func fetchUsdToIrrPrice() (string, error) {
 		proxyEnabled = true
 	}
 
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
+	// Create browser context with error handling
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
 
-	// Create browser context
-	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
-	defer cancel()
+	// Create browser context with custom timeout for browser startup
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 15*time.Second)
+	defer browserCancel()
 
-	// Set up timeout
-	taskCtx, cancel = context.WithTimeout(taskCtx, 25*time.Second)
-	defer cancel()
+	taskCtx, taskCancel := chromedp.NewContext(
+		browserCtx,
+		chromedp.WithLogf(log.Printf),
+		chromedp.WithErrorf(log.Printf),
+	)
+	defer taskCancel()
+
+	// Test browser launch to catch early errors
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+		log.Printf("ERROR initializing browser: %v", err)
+		return "", fmt.Errorf("failed to initialize browser: %v", err)
+	}
 
 	var price string
 	var htmlContent string
@@ -447,14 +504,26 @@ func fetchGoldPriceInIRR() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Default chromedp options
+	// Default chromedp options with additional flags for stability in Docker
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("single-process", true),
+		chromedp.Flag("no-zygote", true),
+		chromedp.Flag("deterministic-fetch", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
+
+	// Add Chrome path if available
+	if browserPath := getBrowserPath(); browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+		log.Printf("Using browser at path: %s", browserPath)
+	} else {
+		log.Println("No specific browser path set, letting chromedp find browser automatically")
+	}
 
 	// Check if a proxy is configured for tgju.org
 	proxyEnabled := false
@@ -464,16 +533,26 @@ func fetchGoldPriceInIRR() (string, error) {
 		proxyEnabled = true
 	}
 
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
+	// Create browser context with error handling
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
 
-	// Create browser context
-	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
-	defer cancel()
+	// Create browser context with custom timeout for browser startup
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 15*time.Second)
+	defer browserCancel()
 
-	// Set up timeout
-	taskCtx, cancel = context.WithTimeout(taskCtx, 25*time.Second)
-	defer cancel()
+	taskCtx, taskCancel := chromedp.NewContext(
+		browserCtx,
+		chromedp.WithLogf(log.Printf),
+		chromedp.WithErrorf(log.Printf),
+	)
+	defer taskCancel()
+
+	// Test browser launch to catch early errors
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+		log.Printf("ERROR initializing browser: %v", err)
+		return "", fmt.Errorf("failed to initialize browser: %v", err)
+	}
 
 	var price string
 	var htmlContent string
@@ -807,6 +886,55 @@ func setupLogging() *os.File {
 	return logFile
 }
 
+// validateProxy checks if a proxy is working for accessing the specified URL
+func validateProxy(proxyURL, targetURL string) bool {
+	log.Printf("Validating proxy %s for URL %s...", proxyURL, targetURL)
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Default chromedp options
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.ProxyServer(proxyURL),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
+	)
+
+	// Add Chrome path if in Docker
+	if browserPath := getBrowserPath(); browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+		log.Printf("Using browser at path: %s", browserPath)
+	}
+
+	// Create allocator context
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancel()
+
+	// Create browser context
+	taskCtx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	// Try a simple navigation
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(targetURL),
+		chromedp.Sleep(2*time.Second),
+	)
+
+	if err != nil {
+		log.Printf("❌ PROXY VALIDATION FAILED: %v", err)
+		log.Println("⚠️ Your proxy configuration appears to be invalid or the proxy cannot reach tgju.org")
+		log.Println("⚠️ Bot will continue, but scraping functions may fail")
+		return false
+	}
+
+	log.Println("✅ Proxy validation successful - proxy is working correctly")
+	return true
+}
+
 func main() {
 	// Setup logging
 	logFile := setupLogging()
@@ -819,6 +947,9 @@ func main() {
 	// Start the cache refresher
 	log.Println("Starting hourly price cache refresher")
 	StartCacheRefresher()
+
+	// Validate proxy if configured
+	validateProxy(os.Getenv("TGJU_PROXY"), "https://www.tgju.org")
 
 	// Get bot token from environment variable
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
