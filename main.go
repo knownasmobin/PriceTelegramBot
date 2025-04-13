@@ -434,14 +434,14 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 			}
 		}
 
-		log.Printf("Applying proxy to chromedp via ProxyServer: '%s'", proxyURL) // Log exact value being used
-		// Add proxy using the recommended programmatic way
-		opts = append(opts, chromedp.ProxyServer(proxyURL))
+		log.Printf("Applying proxy to chromedp via command-line flag --proxy-server='%s'", proxyURL) // Log exact value being used
+		// Add proxy using the command-line flag method
+		opts = append(opts, chromedp.Flag("proxy-server", proxyURL))
 
-		// Temporarily remove ignore-certificate-errors for testing
-		// opts = append(opts,
-		// 	 chromedp.Flag("ignore-certificate-errors", true),
-		// )
+		// Restore ignore-certificate-errors flag, often needed for proxies
+		opts = append(opts,
+			chromedp.Flag("ignore-certificate-errors", true),
+		)
 	}
 	return opts
 }
@@ -1231,55 +1231,6 @@ func setupLogging() *os.File {
 	return logFile
 }
 
-// validateProxy checks if a proxy is working for accessing the specified URL
-func validateProxy(proxyURL, targetURL string) bool {
-	log.Printf("Validating proxy %s for URL %s...", proxyURL, targetURL)
-
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	// Default chromedp options
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.ProxyServer(proxyURL),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
-	)
-
-	// Add Chrome path if in Docker
-	if browserPath := getBrowserPath(); browserPath != "" {
-		opts = append(opts, chromedp.ExecPath(browserPath))
-		log.Printf("Using browser at path: %s", browserPath)
-	}
-
-	// Create allocator context
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
-
-	// Create browser context
-	taskCtx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// Try a simple navigation
-	err := chromedp.Run(taskCtx,
-		chromedp.Navigate(targetURL),
-		chromedp.Sleep(2*time.Second),
-	)
-
-	if err != nil {
-		log.Printf("❌ PROXY VALIDATION FAILED: %v", err)
-		log.Println("⚠️ Your proxy configuration appears to be invalid or the proxy cannot reach tgju.org")
-		log.Println("⚠️ Bot will continue, but scraping functions may fail")
-		return false
-	}
-
-	log.Println("✅ Proxy validation successful - proxy is working correctly")
-	return true
-}
-
 func main() {
 	// Setup logging
 	logFile := setupLogging()
@@ -1293,8 +1244,8 @@ func main() {
 	log.Println("Starting hourly price cache refresher")
 	StartCacheRefresher()
 
-	// Validate proxy if configured
-	validateProxy(os.Getenv("TGJU_PROXY"), "https://www.tgju.org")
+	// Validate proxy if configured - REMOVED
+	// validateProxy(os.Getenv("TGJU_PROXY"), "https://www.tgju.org")
 
 	// Get bot token from environment variable
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
