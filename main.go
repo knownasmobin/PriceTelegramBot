@@ -454,26 +454,52 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 
 	// Base options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
+		// Container-specific flags
 		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("headless", true),
+		// Prevent process scheduler issues
+		chromedp.Flag("disable-process-singleton", true),
+		chromedp.Flag("disable-features", "ProcessPerSite,IsolateOrigins,site-per-process"),
+		// Memory and performance optimizations
 		chromedp.Flag("single-process", true),
 		chromedp.Flag("no-zygote", true),
-		chromedp.Flag("deterministic-fetch", true),
-		// Prevent singleton lock issues
-		chromedp.Flag("disable-process-singleton", true),
-		chromedp.Flag("disable-features", "ProcessPerSite"),
-		// Set custom temp directory
-		chromedp.Flag("user-data-dir", tempDir),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		// Cache and storage settings
 		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
-		// Reduce memory usage
-		chromedp.Flag("aggressive-cache-discard", true),
+		chromedp.Flag("user-data-dir", tempDir),
 		chromedp.Flag("disable-cache", true),
 		chromedp.Flag("disable-application-cache", true),
 		chromedp.Flag("disable-offline-load-stale-cache", true),
-		chromedp.Flag("disable-extensions", true),
+		// Security settings
+		chromedp.Flag("ignore-certificate-errors", true),
+		chromedp.Flag("allow-insecure-localhost", true),
+		// Performance settings
+		chromedp.Flag("disable-software-rasterizer", true),
+		chromedp.Flag("disable-accelerated-2d-canvas", true),
+		chromedp.Flag("disable-accelerated-jpeg-decoding", true),
+		chromedp.Flag("disable-accelerated-mjpeg-decode", true),
+		chromedp.Flag("disable-accelerated-video-decode", true),
+		// Container-specific workarounds
+		chromedp.Flag("disable-features", "TranslateUI,BlinkGenPropertyTrees"),
+		chromedp.Flag("disable-breakpad", true),
+		chromedp.Flag("disable-component-extensions-with-background-pages", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("metrics-recording-only", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("no-pings", true),
+		chromedp.Flag("no-sandbox-and-elevated", true),
+		chromedp.Flag("no-service-autorun", true),
+		chromedp.Flag("no-wifi", true),
+		chromedp.Flag("password-store", "basic"),
+		chromedp.Flag("use-mock-keychain", true),
 	)
 
 	// Add proxy configuration if available
@@ -1218,12 +1244,34 @@ func fetchMazanehPrices() (usdIrt, goldIrt, gbpIrt string, err error) {
 	// Configure Chrome options
 	opts := configureChromeOptions()
 
-	// Create allocator context
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer allocCancel()
+	// Create allocator context with retry logic
+	var allocCtx context.Context
+	var allocCancel context.CancelFunc
+	var taskCtx context.Context
+	var taskCancel context.CancelFunc
 
-	// Create task context
-	taskCtx, taskCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	// Retry logic for Chrome startup
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		allocCtx, allocCancel = chromedp.NewExecAllocator(ctx, opts...)
+		taskCtx, taskCancel = chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+
+		// Try a simple navigation to ensure browser starts correctly
+		if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err == nil {
+			break
+		}
+
+		// Cleanup failed attempt
+		taskCancel()
+		allocCancel()
+
+		if i < maxRetries-1 {
+			log.Printf("Chrome startup attempt %d failed, retrying...", i+1)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	defer allocCancel()
 	defer taskCancel()
 
 	// Navigate and extract prices
@@ -1680,7 +1728,8 @@ func main() {
 		// Log the incoming message
 		log.Printf("Received message from %s (ID: %d): %s", chatTitle, chatID, update.Message.Text)
 
-		msg := tgbotapi.NewMessage(chatID, "")
+		// Create message with default text
+		msg := tgbotapi.NewMessage(chatID, "❌ Error: Could not process your request. Please try again later.")
 		msg.ParseMode = "Markdown"
 
 		// Handle both commands and button clicks
@@ -1693,18 +1742,51 @@ func main() {
 		case "start":
 			msg.Text = "Welcome to Price Bot! Use the buttons below to get price information, or /subscribe to receive regular updates."
 			msg.ReplyMarkup = createCommandKeyboard()
-		case "help":
+		case "help", "❓ Help":
 			msg.Text = "*Available commands:*\n" +
 				"📊 Prices - Get Bitcoin, Gold prices in USD, USD to IRT rate, and Gold price in IRT\n" +
 				"💰 Bitcoin - Get Bitcoin price in USD\n" +
 				"🥇 Gold - Get Gold price in USD\n" +
 				"💵 USD/IRT - Get USD to IRT exchange rate\n" +
+				"💷 GBP/IRT - Get GBP to IRT exchange rate\n" +
 				"🏅 Gold/IRT - Get Gold price in IRT\n" +
 				"/subscribe <minutes> - Subscribe to price updates (e.g. /subscribe 30 for updates every 30 minutes)\n" +
 				"/unsubscribe - Stop receiving price updates\n" +
 				"ℹ️ Status - Check subscription status\n" +
 				"🔄 Refresh - Force refresh of price data"
 			msg.ReplyMarkup = createCommandKeyboard()
+		case "💷 GBP/IRT":
+			// Refresh GBP to IRT price in the background
+			go priceCache.updateGbpToIrrPrice()
+
+			// Send a temporary message while refreshing
+			tempMsg := tgbotapi.NewMessage(chatID, "⏳ *Fetching latest GBP to IRT exchange rate...*")
+			tempMsg.ParseMode = "Markdown"
+			sentMsg, err := bot.Send(tempMsg)
+
+			// Wait a bit for data to refresh
+			time.Sleep(1 * time.Second)
+
+			// Get the updated GBP to IRT price
+			gbpToIrrPrice, priceErr := getGbpToIrrPrice()
+			if priceErr != nil {
+				msg.Text = fmt.Sprintf("❌ Error getting GBP to IRT exchange rate: %v", priceErr)
+			} else {
+				msg.Text = fmt.Sprintf("💷 *GBP to IRT*: %s Tomans", gbpToIrrPrice)
+			}
+
+			// If we successfully sent the temp message, edit it
+			if err == nil {
+				editMsg := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, msg.Text)
+				editMsg.ParseMode = "Markdown"
+				if _, err := bot.Send(editMsg); err != nil {
+					log.Printf("Error editing message: %v, sending new message instead", err)
+					if _, err := bot.Send(msg); err != nil {
+						log.Printf("Error sending message to %s (ID: %d): %v", chatTitle, chatID, err)
+					}
+				}
+				continue
+			}
 		case "📊 Prices":
 			// Run a scraper refresh in the background
 			go priceCache.refreshCache()
