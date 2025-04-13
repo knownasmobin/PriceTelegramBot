@@ -467,15 +467,28 @@ func configureProxyOpts(opts []chromedp.ExecAllocatorOption) []chromedp.ExecAllo
 	return opts
 }
 
-// fetchUsdToIrrPrice uses chromedp to fetch USD to IRR price with a headless browser
+// fetchUsdToIrrPrice fetches the USD to IRR price, trying Mazaneh first, then Bonbast.
 func fetchUsdToIrrPrice() (string, error) {
-	log.Println("Fetching USD to IRR price using headless browser...")
+	// Try Mazaneh first
+	usdPrice, _, _, err := fetchMazanehPrices()
+	// Handle error OR empty price from Mazaneh
+	if err == nil && usdPrice != "" {
+		log.Println("Using USD/IRR price from mazaneh.net")
+		return usdPrice, nil
+	}
+	if err != nil {
+		log.Printf("Failed to fetch prices from mazaneh.net, falling back: %v", err)
+	} else { // err == nil but usdPrice == ""
+		log.Printf("Fetched from mazaneh.net but USD price was empty, falling back.")
+	}
 
-	// Try fetching with browser
+	// Fallback 1: Try fetching with browser (bonbast)
+	log.Println("Falling back to fetching USD/IRR from Bonbast (browser)...")
 	price, err := fetchUsdToIrrWithBrowser()
 	if err != nil {
-		log.Printf("Browser-based fetching failed: %v", err)
-		log.Println("Trying fallback method for USD to IRR price...")
+		log.Printf("Bonbast browser fetch failed: %v", err)
+		// Fallback 2: Try fallback method (bonbast simple GET)
+		log.Println("Falling back to fetching USD/IRR from Bonbast (fallback GET)...")
 		return fetchUsdToIrrFallback()
 	}
 	return price, nil
@@ -689,15 +702,28 @@ func getUsdToIrrPrice() (string, error) {
 	return fetchUsdToIrrPrice()
 }
 
-// fetchGoldPriceInIRR uses chromedp to fetch Gold price in IRR with a headless browser
+// fetchGoldPriceInIRR fetches the Gold price in IRR, trying Mazaneh first, then Bonbast.
 func fetchGoldPriceInIRR() (string, error) {
-	log.Println("Fetching Gold IRR price using headless browser...")
+	// Try Mazaneh first
+	_, goldPrice, _, err := fetchMazanehPrices()
+	// Handle error OR empty price from Mazaneh
+	if err == nil && goldPrice != "" {
+		log.Println("Using Gold/IRR price from mazaneh.net")
+		return goldPrice, nil
+	}
+	if err != nil {
+		log.Printf("Failed to fetch prices from mazaneh.net, falling back: %v", err)
+	} else { // err == nil but goldPrice == ""
+		log.Printf("Fetched from mazaneh.net but Gold price was empty, falling back.")
+	}
 
-	// Try fetching with browser
+	// Fallback 1: Try fetching with browser (bonbast)
+	log.Println("Falling back to fetching Gold/IRR from Bonbast (browser)...")
 	price, err := fetchGoldIrrWithBrowser()
 	if err != nil {
-		log.Printf("Browser-based fetching failed: %v", err)
-		log.Println("Trying fallback method for Gold IRR price...")
+		log.Printf("Bonbast browser fetch failed: %v", err)
+		// Fallback 2: Try fallback method (bonbast simple GET)
+		log.Println("Falling back to fetching Gold/IRR from Bonbast (fallback GET)...")
 		return fetchGoldIrrFallback()
 	}
 	return price, nil
@@ -911,146 +937,29 @@ func getGoldPriceInIRR() (string, error) {
 	return fetchGoldPriceInIRR()
 }
 
-// getGbpToIrrPrice returns GBP to IRR price (from cache if available)
-func getGbpToIrrPrice() (string, error) {
-	priceCache.mutex.RLock()
-	cachedPrice := priceCache.GbpToIrr
-	lastUpdate := priceCache.LastUpdate
-	priceCache.mutex.RUnlock()
-
-	// If we have a valid cached price (non-empty and not too old), use it
-	if cachedPrice != "" && time.Since(lastUpdate) < 70*time.Minute {
-		return cachedPrice, nil
-	}
-
-	// Otherwise fetch fresh data
-	return fetchGbpToIrrPrice()
-}
-
-// getPriceMessage returns a formatted message with current prices
-func getPriceMessage() string {
-	bitcoinPrice, btcErr := getBitcoinPrice()
-	goldPrice, goldUsdErr := getGoldPrice()
-	usdToIrrPrice, usdIrrErr := getUsdToIrrPrice()
-	goldIrrPrice, goldIrrErr := getGoldPriceInIRR()
-	gbpToIrrPrice, gbpIrrErr := getGbpToIrrPrice()
-
-	// Check if we have at least some prices to display
-	if btcErr != nil && goldUsdErr != nil && usdIrrErr != nil && goldIrrErr != nil && gbpIrrErr != nil {
-		return "❌ *Error*: Could not retrieve any price data. Please try again later."
-	}
-
-	var messageBuilder strings.Builder
-	messageBuilder.WriteString("📊 *Current Market Prices*\n\n")
-
-	// Global prices section
-	messageBuilder.WriteString("🌎 *Global Markets*:\n")
-	if btcErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Bitcoin*: $%.2f\n", bitcoinPrice))
-	} else {
-		messageBuilder.WriteString("• *Bitcoin*: Data unavailable\n")
-	}
-
-	if goldUsdErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Gold* (per ounce): $%.2f\n", goldPrice))
-	} else {
-		messageBuilder.WriteString("• *Gold* (per ounce): Data unavailable\n")
-	}
-
-	// Iranian market section
-	messageBuilder.WriteString("\n🇮🇷 *Iranian Market*:\n")
-	if usdIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *USD to IRR*: %s Rials\n", usdToIrrPrice))
-	} else {
-		messageBuilder.WriteString("• *USD to IRR*: Data unavailable\n")
-	}
-
-	if gbpIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *GBP to IRR*: %s Rials\n", gbpToIrrPrice))
-	} else {
-		messageBuilder.WriteString("• *GBP to IRR*: Data unavailable\n")
-	}
-
-	if goldIrrErr == nil {
-		messageBuilder.WriteString(fmt.Sprintf("• *Gold in IRR*: %s Rials\n", goldIrrPrice))
-	} else {
-		messageBuilder.WriteString("• *Gold in IRR*: Data unavailable\n")
-	}
-
-	// Get the cache update time
-	priceCache.mutex.RLock()
-	lastUpdate := priceCache.LastUpdate
-	priceCache.mutex.RUnlock()
-
-	var updateTimeStr string
-	if lastUpdate.IsZero() {
-		updateTimeStr = time.Now().Format("2006-01-02 15:04:05")
-	} else {
-		updateTimeStr = lastUpdate.Format("2006-01-02 15:04:05")
-	}
-
-	// Footer with timestamps
-	messageBuilder.WriteString(fmt.Sprintf("\n_Cache last updated: %s_", updateTimeStr))
-
-	return messageBuilder.String()
-}
-
-// StartScheduler starts the scheduler to send periodic updates
-func StartScheduler(bot *tgbotapi.BotAPI, manager *SubscriptionManager) {
-	// Create a ticker that checks every minute
-	ticker := time.NewTicker(1 * time.Minute)
-
-	go func() {
-		for range ticker.C {
-			// Check all subscriptions
-			for _, sub := range manager.GetAllSubscriptions() {
-				// We'll use a simple approach: if the current minute is divisible by the interval
-				if time.Now().Minute()%int(sub.Interval.Minutes()) == 0 {
-					msg := tgbotapi.NewMessage(sub.ChatID, getPriceMessage())
-					msg.ParseMode = "Markdown"
-
-					if _, err := bot.Send(msg); err != nil {
-						log.Printf("Error sending scheduled message to %s (ID: %d): %v", sub.ChatTitle, sub.ChatID, err)
-					}
-				}
-			}
-		}
-	}()
-}
-
-// setupLogging configures logging to both console and file
-func setupLogging() *os.File {
-	// Create logs directory if it doesn't exist
-	if err := os.MkdirAll("logs", 0755); err != nil {
-		log.Printf("Warning: could not create logs directory: %v", err)
-	}
-
-	// Create log file with current date
-	logFileName := filepath.Join("logs", fmt.Sprintf("bot_%s.log", time.Now().Format("2006-01-02")))
-	logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("Warning: could not create log file: %v", err)
-		return nil
-	}
-
-	// Configure log to write to both file and console
-	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	log.Println("Logging configured successfully")
-
-	return logFile
-}
-
-// fetchGbpToIrrPrice uses chromedp to fetch GBP to IRR price with a headless browser
+// fetchGbpToIrrPrice fetches the GBP to IRR price, trying Mazaneh first, then Bonbast.
 func fetchGbpToIrrPrice() (string, error) {
-	log.Println("Fetching GBP to IRR price using headless browser...")
-
-	// Try fetching with browser
-	price, err := fetchGbpToIrrWithBrowser()
+	// Try Mazaneh first
+	_, _, gbpPrice, err := fetchMazanehPrices()
+	// Handle error OR empty price from Mazaneh
+	if err == nil && gbpPrice != "" {
+		log.Println("Using GBP/IRR price from mazaneh.net")
+		return gbpPrice, nil
+	}
 	if err != nil {
-		log.Printf("Browser-based fetching failed: %v", err)
-		log.Println("Trying fallback method for GBP to IRR price...")
-		return fetchGbpToIrrFallback()
+		log.Printf("Failed to fetch prices from mazaneh.net, falling back to Bonbast: %v", err)
+	} else { // err == nil but gbpPrice == ""
+		log.Printf("Fetched from mazaneh.net but GBP price was empty, falling back to Bonbast.")
+	}
+
+	// Fallback 1: Try fetching with browser (bonbast)
+	log.Println("Falling back to fetching GBP/IRR from Bonbast (browser)...")
+	price, err := fetchGbpToIrrWithBrowser() // Call the existing Bonbast browser func
+	if err != nil {
+		log.Printf("Bonbast browser fetch failed: %v", err)
+		// Fallback 2: Try fallback method (bonbast simple GET)
+		log.Println("Falling back to fetching GBP/IRR from Bonbast (fallback GET)...")
+		return fetchGbpToIrrFallback() // Call the existing Bonbast fallback func
 	}
 	return price, nil
 }
@@ -1245,6 +1154,233 @@ func fetchGbpToIrrFallback() (string, error) {
 	}
 
 	return "", fmt.Errorf("all fallback methods failed to fetch GBP IRR price")
+}
+
+// getGbpToIrrPrice returns the latest GBP to IRR exchange rate from the cache
+func getGbpToIrrPrice() (string, error) {
+	priceCache.mutex.RLock()
+	// Check if cache has a valid, non-stale price
+	if priceCache.GbpToIrr != "" && !priceCache.LastUpdate.IsZero() && time.Since(priceCache.LastUpdate) < 70*time.Minute {
+		price := priceCache.GbpToIrr
+		priceCache.mutex.RUnlock()
+		return price, nil
+	}
+	priceCache.mutex.RUnlock() // Release lock before potentially lengthy update
+
+	// Cache miss or stale, trigger update and return fresh/stale/error
+	log.Println("Cache miss or stale for GBP/IRR, attempting refresh...")
+	err := priceCache.updateGbpToIrrPrice() // This blocks until updated
+
+	priceCache.mutex.RLock() // Re-acquire lock to read potentially updated value
+	defer priceCache.mutex.RUnlock()
+
+	if err != nil {
+		log.Printf("Error refreshing GBP/IRR price: %v", err)
+		// Return stale data if available, otherwise error
+		if priceCache.GbpToIrr != "" {
+			log.Println("Returning stale GBP/IRR data due to refresh error.")
+			return priceCache.GbpToIrr, nil // Return stale data
+		}
+		return "", fmt.Errorf("failed to fetch GBP/IRR price and no cached value available: %w", err)
+	}
+
+	// Refresh succeeded (or was already up-to-date), return the value
+	if priceCache.GbpToIrr == "" {
+		// Should not happen if update succeeded without error, but check anyway
+		return "", fmt.Errorf("GBP/IRR price not available in cache even after refresh attempt")
+	}
+	return priceCache.GbpToIrr, nil
+}
+
+// fetchMazanehPrices fetches USD, Gold (IRR), and GBP prices from mazaneh.net
+func fetchMazanehPrices() (usdIrr, goldIrr, gbpIrr string, err error) {
+	log.Println("Attempting to fetch prices from mazaneh.net...")
+	mazanehURL := "https://mazaneh.net/fa"
+
+	// Create a context with a timeout for the entire operation
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Create chrome instance options
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"),
+	)
+
+	// Apply proxy settings if configured
+	opts = configureProxyOpts(opts)
+
+	// Create a temporary directory for Chrome user data
+	tempDir := createChromeTempDir()
+	if tempDir != "" {
+		log.Printf("Using temporary directory for Chrome user data: %s", tempDir)
+		opts = append(opts, chromedp.UserDataDir(tempDir))
+		// Schedule cleanup of the temporary directory
+		defer func() {
+			go cleanupChromeTempDirs(filepath.Dir(tempDir)) // Cleanup parent directory containing the temp dir
+		}()
+	} else {
+		log.Println("Could not create temporary directory for Chrome user data, proceeding without it.")
+	}
+
+	// Create allocator context with the timeout context
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...) // Pass the timeout context here
+	defer cancel()
+
+	// Create task context
+	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	defer cancel()
+
+	// Navigate and extract prices
+	err = chromedp.Run(taskCtx,
+		chromedp.Navigate(mazanehURL),
+		chromedp.WaitVisible(`body`, chromedp.ByQuery), // Wait for body to be potentially ready
+		chromedp.Sleep(4*time.Second),                  // Increase wait time slightly for dynamic content
+		chromedp.Text(`a[href="/currencyprice/دلار"] ~ div.CurrencyPrice`, &usdIrr, chromedp.NodeVisible, chromedp.ByQuery),
+		chromedp.Text(`a[href="/currencyprice/مظنه_طلا"] ~ div.CurrencyPrice`, &goldIrr, chromedp.NodeVisible, chromedp.ByQuery),
+		chromedp.Text(`a[href="/currencyprice/پوند"] ~ div.CurrencyPrice`, &gbpIrr, chromedp.NodeVisible, chromedp.ByQuery),
+	)
+
+	if err != nil {
+		// Check specifically for context deadline exceeded
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("Timeout fetching prices from mazaneh.net: %v", err)
+			return "", "", "", fmt.Errorf("timeout fetching from mazaneh.net: %w", err)
+		}
+		log.Printf("Error fetching prices from mazaneh.net using chromedp: %v", err)
+		return "", "", "", fmt.Errorf("failed to fetch prices from mazaneh.net: %w", err)
+	}
+
+	// Basic validation and cleaning (remove commas)
+	usdIrr = strings.ReplaceAll(usdIrr, ",", "")
+	goldIrr = strings.ReplaceAll(goldIrr, ",", "")
+	gbpIrr = strings.ReplaceAll(gbpIrr, ",", "")
+
+	// Log even if some prices are empty, but don't return an error here.
+	// The calling function will decide to fallback based on the specific empty price it needs.
+	if usdIrr == "" || goldIrr == "" || gbpIrr == "" {
+		log.Printf("Mazaneh fetch completed but one or more prices were empty. USD: '%s', Gold: '%s', GBP: '%s'", usdIrr, goldIrr, gbpIrr)
+	}
+
+	log.Printf("Successfully fetched prices from mazaneh.net: USD=%s, Gold=%s, GBP=%s", usdIrr, goldIrr, gbpIrr)
+	return usdIrr, goldIrr, gbpIrr, nil // Return potentially partial results and nil error if chromedp succeeded
+}
+
+// getPriceMessage returns a formatted message with current prices
+func getPriceMessage() string {
+	bitcoinPrice, btcErr := getBitcoinPrice()
+	goldPrice, goldUsdErr := getGoldPrice()
+	usdToIrrPrice, usdIrrErr := getUsdToIrrPrice()
+	goldIrrPrice, goldIrrErr := getGoldPriceInIRR()
+	gbpToIrrPrice, gbpIrrErr := getGbpToIrrPrice()
+
+	// Check if we have at least some prices to display
+	if btcErr != nil && goldUsdErr != nil && usdIrrErr != nil && goldIrrErr != nil && gbpIrrErr != nil {
+		return "❌ *Error*: Could not retrieve any price data. Please try again later."
+	}
+
+	var messageBuilder strings.Builder
+	messageBuilder.WriteString("📊 *Current Market Prices*\n\n")
+
+	// Global prices section
+	messageBuilder.WriteString("🌎 *Global Markets*:\n")
+	if btcErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *Bitcoin*: $%.2f\n", bitcoinPrice))
+	} else {
+		messageBuilder.WriteString("• *Bitcoin*: Data unavailable\n")
+	}
+
+	if goldUsdErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *Gold* (per ounce): $%.2f\n", goldPrice))
+	} else {
+		messageBuilder.WriteString("• *Gold* (per ounce): Data unavailable\n")
+	}
+
+	// Iranian market section
+	messageBuilder.WriteString("\n🇮🇷 *Iranian Market*:\n")
+	if usdIrrErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *USD to IRR*: %s Rials\n", usdToIrrPrice))
+	} else {
+		messageBuilder.WriteString("• *USD to IRR*: Data unavailable\n")
+	}
+
+	if gbpIrrErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *GBP to IRR*: %s Rials\n", gbpToIrrPrice))
+	} else {
+		messageBuilder.WriteString("• *GBP to IRR*: Data unavailable\n")
+	}
+
+	if goldIrrErr == nil {
+		messageBuilder.WriteString(fmt.Sprintf("• *Gold in IRR*: %s Rials\n", goldIrrPrice))
+	} else {
+		messageBuilder.WriteString("• *Gold in IRR*: Data unavailable\n")
+	}
+
+	// Get the cache update time
+	priceCache.mutex.RLock()
+	lastUpdate := priceCache.LastUpdate
+	priceCache.mutex.RUnlock()
+
+	var updateTimeStr string
+	if lastUpdate.IsZero() {
+		updateTimeStr = time.Now().Format("2006-01-02 15:04:05")
+	} else {
+		updateTimeStr = lastUpdate.Format("2006-01-02 15:04:05")
+	}
+
+	// Footer with timestamps
+	messageBuilder.WriteString(fmt.Sprintf("\n_Cache last updated: %s_", updateTimeStr))
+
+	return messageBuilder.String()
+}
+
+// StartScheduler starts the scheduler to send periodic updates
+func StartScheduler(bot *tgbotapi.BotAPI, manager *SubscriptionManager) {
+	// Create a ticker that checks every minute
+	ticker := time.NewTicker(1 * time.Minute)
+
+	go func() {
+		for range ticker.C {
+			// Check all subscriptions
+			for _, sub := range manager.GetAllSubscriptions() {
+				// We'll use a simple approach: if the current minute is divisible by the interval
+				if time.Now().Minute()%int(sub.Interval.Minutes()) == 0 {
+					msg := tgbotapi.NewMessage(sub.ChatID, getPriceMessage())
+					msg.ParseMode = "Markdown"
+
+					if _, err := bot.Send(msg); err != nil {
+						log.Printf("Error sending scheduled message to %s (ID: %d): %v", sub.ChatTitle, sub.ChatID, err)
+					}
+				}
+			}
+		}
+	}()
+}
+
+// setupLogging configures logging to both console and file
+func setupLogging() *os.File {
+	// Create logs directory if it doesn't exist
+	if err := os.MkdirAll("logs", 0755); err != nil {
+		log.Printf("Warning: could not create logs directory: %v", err)
+	}
+
+	// Create log file with current date
+	logFileName := filepath.Join("logs", fmt.Sprintf("bot_%s.log", time.Now().Format("2006-01-02")))
+	logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Warning: could not create log file: %v", err)
+		return nil
+	}
+
+	// Configure log to write to both file and console
+	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	log.Println("Logging configured successfully")
+
+	return logFile
 }
 
 func main() {
