@@ -334,9 +334,11 @@ func fetchUsdToIrrPrice() (string, error) {
 	)
 
 	// Check if a proxy is configured for tgju.org
+	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
 		opts = append(opts, chromedp.ProxyServer(proxyURL))
+		proxyEnabled = true
 	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -353,6 +355,22 @@ func fetchUsdToIrrPrice() (string, error) {
 	var price string
 	var htmlContent string
 
+	// If proxy is configured, test connectivity first
+	if proxyEnabled {
+		log.Println("Testing proxy connectivity...")
+		testErr := chromedp.Run(taskCtx,
+			chromedp.Navigate("https://www.tgju.org"),
+			chromedp.Sleep(1*time.Second),
+		)
+
+		if testErr != nil {
+			log.Printf("⚠️ PROXY ERROR: Could not connect to tgju.org through proxy: %v", testErr)
+			log.Println("⚠️ Please check your proxy configuration or try a different proxy")
+			return "", fmt.Errorf("proxy connection failed: %v", testErr)
+		}
+		log.Println("✅ Proxy connection successful")
+	}
+
 	// Navigate to the page and extract price
 	err := chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"),
@@ -366,8 +384,9 @@ func fetchUsdToIrrPrice() (string, error) {
 		chromedp.Text(`span#l-price_dollar_rl`, &price, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 
-	// Save the HTML content for debugging
-	if htmlContent != "" {
+	// Check if we have any content - if empty, it likely means the page didn't load properly
+	if htmlContent == "" && proxyEnabled {
+		log.Println("⚠️ WARNING: Empty page content received. Proxy may be blocked or returning invalid content.")
 	}
 
 	// If the first selector failed, try using regular expressions on the HTML content
@@ -438,9 +457,11 @@ func fetchGoldPriceInIRR() (string, error) {
 	)
 
 	// Check if a proxy is configured for tgju.org
+	proxyEnabled := false
 	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
 		log.Printf("Using proxy for tgju.org: %s", proxyURL)
 		opts = append(opts, chromedp.ProxyServer(proxyURL))
+		proxyEnabled = true
 	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -457,6 +478,22 @@ func fetchGoldPriceInIRR() (string, error) {
 	var price string
 	var htmlContent string
 
+	// If proxy is configured, test connectivity first (if not already tested by USD fetcher)
+	if proxyEnabled {
+		log.Println("Testing proxy connectivity for gold price...")
+		testErr := chromedp.Run(taskCtx,
+			chromedp.Navigate("https://www.tgju.org"),
+			chromedp.Sleep(1*time.Second),
+		)
+
+		if testErr != nil {
+			log.Printf("⚠️ PROXY ERROR: Could not connect to tgju.org through proxy: %v", testErr)
+			log.Println("⚠️ Please check your proxy configuration or try a different proxy")
+			return "", fmt.Errorf("proxy connection failed: %v", testErr)
+		}
+		log.Println("✅ Proxy connection successful")
+	}
+
 	// First try on the main gold price page
 	err := chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org"),
@@ -467,6 +504,11 @@ func fetchGoldPriceInIRR() (string, error) {
 			return nil
 		}),
 	)
+
+	// Check if we have any content - if empty, it likely means the page didn't load properly
+	if htmlContent == "" && proxyEnabled {
+		log.Println("⚠️ WARNING: Empty main page content received. Proxy may be blocked or returning invalid content.")
+	}
 
 	// Save the HTML content for debugging
 	if htmlContent != "" {
@@ -509,6 +551,11 @@ func fetchGoldPriceInIRR() (string, error) {
 			return nil
 		}),
 	)
+
+	// Check if we have any content - if empty, it likely means the page didn't load properly
+	if htmlContent == "" && proxyEnabled {
+		log.Println("⚠️ WARNING: Empty gold page content received. Proxy may be blocked or returning invalid content.")
+	}
 
 	// Save the HTML content for debugging
 	if htmlContent != "" {
@@ -585,8 +632,9 @@ func fetchGoldPriceInIRR() (string, error) {
 		}),
 	)
 
-	// Save the alternative HTML content for debugging
-	if htmlContent != "" {
+	// Check if we have any content - if empty, it likely means the page didn't load properly
+	if htmlContent == "" && proxyEnabled {
+		log.Println("⚠️ WARNING: Empty alternative page content received. Proxy may be blocked or returning invalid content.")
 	}
 
 	// Try additional patterns on the alternative page
