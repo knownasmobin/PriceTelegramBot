@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  pricetelegrambot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pricetelegrambot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/root/logs 
