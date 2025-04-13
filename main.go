@@ -461,8 +461,8 @@ func fetchUsdToIrrPrice() (string, error) {
 
 // fetchUsdToIrrWithBrowser uses chromedp to fetch USD to IRR price with a headless browser
 func fetchUsdToIrrWithBrowser() (string, error) {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create a context with a longer timeout for the entire operation
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second) // Increased from 30s
 	defer cancel()
 
 	// Create and clean up Chrome temp directory
@@ -517,7 +517,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 30*time.Second) // Increased timeout
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second) // Increased from 30s
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -561,7 +561,7 @@ func fetchUsdToIrrWithBrowser() (string, error) {
 			return nil
 		}),
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%AF%D9%84%D8%A7%D8%B1"),
-		chromedp.Sleep(2*time.Second), // Give time for JavaScript to execute
+		chromedp.Sleep(5*time.Second), // Slightly increased sleep
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Println("Page loaded, searching for price element...")
@@ -735,8 +735,8 @@ func fetchGoldPriceInIRR() (string, error) {
 
 // fetchGoldIrrWithBrowser uses chromedp to fetch Gold price in IRR with a headless browser
 func fetchGoldIrrWithBrowser() (string, error) {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create a context with a longer timeout for the entire operation
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // Increased significantly
 	defer cancel()
 
 	// Create and clean up Chrome temp directory
@@ -791,7 +791,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	defer allocCancel()
 
 	// Create browser context with custom timeout for browser startup
-	browserCtx, browserCancel := context.WithTimeout(allocCtx, 30*time.Second) // Increased timeout
+	browserCtx, browserCancel := context.WithTimeout(allocCtx, 60*time.Second) // Increased from 30s
 	defer browserCancel()
 
 	taskCtx, taskCancel := chromedp.NewContext(
@@ -835,7 +835,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	log.Println("Attempting to fetch gold price from main page...")
 	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org"),
-		chromedp.Sleep(3*time.Second), // Give time for JavaScript to execute
+		chromedp.Sleep(5*time.Second), // Increased sleep
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Println("Main page loaded, searching for price elements...")
@@ -875,7 +875,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	htmlContent = "" // Reset htmlContent
 	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/%D9%82%DB%8C%D9%85%D8%AA-%D8%B7%D9%84%D8%A7"),
-		chromedp.Sleep(3*time.Second), // Give time for JavaScript to execute
+		chromedp.Sleep(5*time.Second), // Increased sleep
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Println("Gold page loaded, searching for price element...")
@@ -936,7 +936,7 @@ func fetchGoldIrrWithBrowser() (string, error) {
 	htmlContent = "" // Reset htmlContent
 	pageErr = chromedp.Run(taskCtx,
 		chromedp.Navigate("https://www.tgju.org/gold-chart"),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Sleep(5*time.Second), // Increased sleep
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Println("Alternative gold page loaded, searching for price element...")
