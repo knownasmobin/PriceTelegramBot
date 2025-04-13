@@ -460,6 +460,11 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("headless", true),
+		// Cookie and storage settings
+		chromedp.Flag("disable-cookies", false),
+		chromedp.Flag("disable-storage-reset", true),
+		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
+		chromedp.Flag("user-data-dir", tempDir),
 		// Prevent process scheduler issues
 		chromedp.Flag("disable-process-singleton", true),
 		chromedp.Flag("disable-features", "ProcessPerSite,IsolateOrigins,site-per-process"),
@@ -470,12 +475,6 @@ func configureChromeOptions() []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
-		// Cache and storage settings
-		chromedp.Flag("disk-cache-dir", filepath.Join(tempDir, "cache")),
-		chromedp.Flag("user-data-dir", tempDir),
-		chromedp.Flag("disable-cache", true),
-		chromedp.Flag("disable-application-cache", true),
-		chromedp.Flag("disable-offline-load-stale-cache", true),
 		// Security settings
 		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.Flag("allow-insecure-localhost", true),
@@ -1274,19 +1273,47 @@ func fetchMazanehPrices() (usdIrt, goldIrt, gbpIrt string, err error) {
 	defer allocCancel()
 	defer taskCancel()
 
-	// Navigate and extract prices
-	err = chromedp.Run(taskCtx,
-		chromedp.Navigate("https://mazaneh.net/fa"),
-		chromedp.WaitVisible(`body`),
-		chromedp.Sleep(4*time.Second),
-		chromedp.Text(`a[href="/currencyprice/دلار"] ~ div.CurrencyPrice`, &usdIrt),
-		chromedp.Text(`a[href="/currencyprice/مظنه_طلا"] ~ div.CurrencyPrice`, &goldIrt),
-		chromedp.Text(`a[href="/currencyprice/پوند"] ~ div.CurrencyPrice`, &gbpIrt),
-	)
+	// Navigate and extract prices with retry logic
+	var htmlContent string
+	for i := 0; i < maxRetries; i++ {
+		err = chromedp.Run(taskCtx,
+			chromedp.Navigate("https://mazaneh.net/fa"),
+			chromedp.WaitVisible(`body`),
+			chromedp.Sleep(4*time.Second),
+			chromedp.Evaluate(`document.documentElement.outerHTML`, &htmlContent),
+		)
+
+		if err == nil {
+			break
+		}
+
+		log.Printf("Navigation attempt %d failed: %v", i+1, err)
+		if i < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
 
 	if err != nil {
-		log.Printf("Error fetching prices from mazaneh.net using chromedp: %v", err)
-		return "", "", "", fmt.Errorf("failed to fetch prices from mazaneh.net: %v", err)
+		return "", "", "", fmt.Errorf("failed to navigate to mazaneh.net: %v", err)
+	}
+
+	// Extract prices using regex as fallback
+	usdRegex := regexp.MustCompile(`<div id="USD" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
+	goldRegex := regexp.MustCompile(`<div id="Div38" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
+	gbpRegex := regexp.MustCompile(`<div id="Div3" class="currencyShape">.*?<div class="CurrencyPrice">([0-9,]+)</div>`)
+
+	usdMatches := usdRegex.FindStringSubmatch(htmlContent)
+	goldMatches := goldRegex.FindStringSubmatch(htmlContent)
+	gbpMatches := gbpRegex.FindStringSubmatch(htmlContent)
+
+	if len(usdMatches) >= 2 {
+		usdIrt = usdMatches[1]
+	}
+	if len(goldMatches) >= 2 {
+		goldIrt = goldMatches[1]
+	}
+	if len(gbpMatches) >= 2 {
+		gbpIrt = gbpMatches[1]
 	}
 
 	// Clean up old temp directories
