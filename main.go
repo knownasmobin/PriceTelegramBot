@@ -324,7 +324,7 @@ func fetchUsdToIrrPrice() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create headless browser context
+	// Default chromedp options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -332,6 +332,12 @@ func fetchUsdToIrrPrice() (string, error) {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
+
+	// Check if a proxy is configured for tgju.org
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+		opts = append(opts, chromedp.ProxyServer(proxyURL))
+	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()
@@ -422,7 +428,7 @@ func fetchGoldPriceInIRR() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create headless browser context with options
+	// Default chromedp options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -430,6 +436,12 @@ func fetchGoldPriceInIRR() (string, error) {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"),
 	)
+
+	// Check if a proxy is configured for tgju.org
+	if proxyURL := os.Getenv("TGJU_PROXY"); proxyURL != "" {
+		log.Printf("Using proxy for tgju.org: %s", proxyURL)
+		opts = append(opts, chromedp.ProxyServer(proxyURL))
+	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()
