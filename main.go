@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1658,6 +1659,48 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery, su
 	}
 }
 
+// RateLimiter tracks user request rates
+type RateLimiter struct {
+	requests map[int64][]time.Time
+	mutex    sync.RWMutex
+}
+
+// NewRateLimiter creates a new rate limiter
+func NewRateLimiter() *RateLimiter {
+	return &RateLimiter{
+		requests: make(map[int64][]time.Time),
+	}
+}
+
+// Allow checks if a user is allowed to make a request based on rate limits
+func (rl *RateLimiter) Allow(userID int64) bool {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Minute) // 1-minute window
+
+	// Clean up old requests
+	if requests, exists := rl.requests[userID]; exists {
+		var validRequests []time.Time
+		for _, reqTime := range requests {
+			if reqTime.After(windowStart) {
+				validRequests = append(validRequests, reqTime)
+			}
+		}
+		rl.requests[userID] = validRequests
+	}
+
+	// Check if user has exceeded rate limit (10 requests per minute)
+	if len(rl.requests[userID]) >= 3 {
+		return false
+	}
+
+	// Add new request
+	rl.requests[userID] = append(rl.requests[userID], now)
+	return true
+}
+
 func main() {
 	// Setup logging
 	logFile := setupLogging()
@@ -1670,9 +1713,6 @@ func main() {
 	// Start the cache refresher
 	log.Println("Starting hourly price cache refresher")
 	StartCacheRefresher()
-
-	// Validate proxy if configured - REMOVED
-	// validateProxy(os.Getenv("TGJU_PROXY"), "https://www.tgju.org")
 
 	// Get bot token from environment variable
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -1690,6 +1730,9 @@ func main() {
 
 	// Initialize subscription manager
 	subManager := NewSubscriptionManager()
+
+	// Initialize rate limiter
+	rateLimiter := NewRateLimiter()
 
 	// Start the scheduler
 	StartScheduler(bot, subManager)
@@ -1728,6 +1771,15 @@ func main() {
 		// Log the incoming message
 		log.Printf("Received message from %s (ID: %d): %s", chatTitle, chatID, update.Message.Text)
 
+		// Check rate limit
+		if !rateLimiter.Allow(chatID) {
+			msg := tgbotapi.NewMessage(chatID, "⚠️ Rate limit exceeded. Please wait a minute before making more requests.")
+			if _, err := bot.Send(msg); err != nil {
+				log.Printf("Error sending rate limit message to %s (ID: %d): %v", chatTitle, chatID, err)
+			}
+			continue
+		}
+
 		// Create message with default text
 		msg := tgbotapi.NewMessage(chatID, "❌ Error: Could not process your request. Please try again later.")
 		msg.ParseMode = "Markdown"
@@ -1755,6 +1807,31 @@ func main() {
 				"ℹ️ Status - Check subscription status\n" +
 				"🔄 Refresh - Force refresh of price data"
 			msg.ReplyMarkup = createCommandKeyboard()
+		case "subscribe":
+			// Parse the interval from the command arguments
+			args := strings.Fields(update.Message.Text)
+			if len(args) < 2 {
+				msg.Text = "❌ Please specify the update interval in minutes. Example: /subscribe 60"
+				break
+			}
+
+			// Convert the interval to minutes
+			interval, err := strconv.Atoi(args[1])
+			if err != nil || interval <= 0 {
+				msg.Text = "❌ Invalid interval. Please provide a positive number of minutes."
+				break
+			}
+
+			// Subscribe the chat
+			subManager.Subscribe(chatID, chatTitle, time.Duration(interval)*time.Minute)
+			msg.Text = fmt.Sprintf("✅ Successfully subscribed to price updates every %d minutes!", interval)
+
+		case "unsubscribe":
+			if subManager.Unsubscribe(chatID) {
+				msg.Text = "✅ Successfully unsubscribed from price updates."
+			} else {
+				msg.Text = "ℹ️ You were not subscribed to price updates."
+			}
 		case "💷 GBP/IRT":
 			// Refresh GBP to IRT price in the background
 			go priceCache.updateGbpToIrrPrice()
